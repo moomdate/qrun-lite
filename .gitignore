@@ -4,6 +4,8 @@ secrets.h
 .dev.vars.*
 !.dev.vars.example
 *.token
+*.pem
+*.key
 .env
 .env.*
 
@@ -15,3 +17,5 @@ dist/
 .vscode/
 *.log
 .DS_Store
+__pycache__/
+*.pyc

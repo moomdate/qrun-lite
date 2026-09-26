@@ -2,6 +2,9 @@
   "name": "qrun-lite-worker",
   "version": "1.0.0",
   "private": true,
+  "engines": {
+    "node": ">=22.12"
+  },
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",

@@ -1,0 +1,61 @@
+# Worker: typecheck + unit + e2e (mock Stripe, wrangler dev). Firmware: native logic tests + ESP32 build.
+# Needs no secrets: the e2e test uses fake values only, and the firmware build uses secrets.h.example.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: worker/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run e2e
+      - run: npm audit --audit-level=moderate
+
+  firmware:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: firmware
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio/.cache
+            ~/.platformio/packages
+            ~/.platformio/platforms
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
+      - run: pip install "platformio>=6.1.16,<7"
+      - name: Native logic tests
+        run: pio test -e native
+      - name: Build (placeholder secrets from the example)
+        run: |
+          test ! -e include/secrets.h
+          cp include/secrets.h.example include/secrets.h
+          pio run -e esp32dev
