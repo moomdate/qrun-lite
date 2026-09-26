@@ -23,7 +23,7 @@ It takes about 15 minutes. Run every command from the project root unless the st
 
 | Need | Check with |
 |---|---|
-| Node.js 20+ | `node -v` |
+| Node.js 22.12+ | `node -v` |
 | PlatformIO (VS Code extension or `pip install platformio`) | `pio --version` |
 | A Cloudflare account (free) | https://dash.cloudflare.com |
 | A Stripe account registered in Thailand | Dashboard → Settings → Business details |
@@ -50,6 +50,10 @@ It takes about 15 minutes. Run every command from the project root unless the st
 | `PRICE_SATANG` | The one price the kiosk may charge, in satang (`2000` = ฿20, minimum `1000`) |
 | `PAYMENT_TTL_SEC` | How long a QR can be paid (default `120`). After that the Worker cancels it at Stripe. |
 | `RECEIPT_EMAIL` | Your shop's email. Stripe requires one on every PromptPay payment. |
+
+> Keeping your fork public? You don't have to commit your email: leave `receipts@example.com` in the file and deploy
+> with `npx wrangler deploy --var RECEIPT_EMAIL:you@yourshop.com`. Pass it on **every** deploy; a plain
+> `wrangler deploy` sets the var back to the file's value.
 
 **`firmware/include/config.h`**:
 
@@ -105,9 +109,20 @@ npx wrangler secret put STRIPE_SECRET_KEY       # paste sk_test_… (or rk_…)
 | `STRIPE_SECRET_KEY` | Stripe Dashboard → **Developers → API keys** |
 | `STRIPE_WEBHOOK_SECRET` | Created in step 5 (not needed yet) |
 
+- **Run every `wrangler` command inside `worker/`**, where `wrangler.jsonc` is. Elsewhere it fails with
+  `Required Worker name missing`.
 - **Cloudflare secrets are write-only.** `npx wrangler secret list` shows names only. If you lose a value, set a new one.
 - A secret takes effect immediately; no redeploy needed.
 - Never paste secrets into a chat or commit them.
+- `secret put` prompts only in an interactive terminal. From a script, an IDE task or an AI agent's shell it reads
+  standard input, and with nothing piped in it stores an **empty** secret while still printing `Success!`. In such a
+  shell, pipe the value from the clipboard so it is never typed or echoed:
+  ```bash
+  pbpaste | npx wrangler secret put STRIPE_SECRET_KEY      # macOS (Linux: xclip -o -selection clipboard | …)
+  openssl rand -hex 24 | tr -d '\n' | pbcopy && pbpaste | npx wrangler secret put DEVICE_TOKEN   # the token is now in the clipboard: paste it into secrets.h too
+  ```
+  If a key still ends up empty or wrong, the Worker refuses to call Stripe and `wrangler tail` says
+  `STRIPE_SECRET_KEY secret is not set` or `STRIPE_SECRET_KEY is not a Stripe secret key`.
 
 ---
 
@@ -182,6 +197,7 @@ pio device monitor
 ```
 You should see something like:
 ```
+[BOOT] reset reason POWERON (1)
 [QRun Lite] lite-1.0.0, price 2000 satang, run 60 s -> wss://qrun-lite.<you>.workers.dev:443
 [WIFI] connected, IP 192.168.1.x
 [WS] connected
@@ -226,7 +242,7 @@ the serial log then shows `"live":true`.
 
 | Task | How |
 |---|---|
-| Update the Worker code | `cd worker && npm run typecheck && npm test && npm run e2e && npx wrangler deploy` |
+| Update the Worker code | `cd worker && npm run typecheck && npm test && npm run e2e && npx wrangler deploy` (add `--var RECEIPT_EMAIL:…` if you keep your email out of the file) |
 | Roll back | `cd worker && npx wrangler rollback` |
 | List secrets (names only) | `cd worker && npx wrangler secret list` |
 | Change the price | Edit `PRICE_SATANG` in **both** `wrangler.jsonc` and `config.h`, deploy and reflash |
@@ -243,7 +259,9 @@ the serial log then shows `"live":true`.
 | Header says **ไม่มี WiFi**, serial `[WIFI] status=1` | Network not found (5 GHz only, or a typo in the name). |
 | Serial `[WIFI] status=4` | Wrong WiFi password. |
 | Stuck on **กำลังเชื่อมต่อ** (connecting) | Wrong `WS_HOST`, or not deployed: try `curl https://<host>/health`. `ws auth rejected` in `wrangler tail` means `DEVICE_TOKEN` differs between `secrets.h` and the secret. TLS also fails if NTP (UDP 123) is blocked. |
-| `/ws` answers `server misconfigured` | The `DEVICE_TOKEN` secret isn't set. |
+| `/ws` answers `server misconfigured` | The `DEVICE_TOKEN` secret isn't set, or is shorter than 16 characters (`wrangler tail` says which). |
+| Every tap errors; tail says `STRIPE_SECRET_KEY secret is not set` / `… is not a Stripe secret key` | The key is missing, empty (see the `secret put` note in step 4) or not a secret key. Set the full `sk_…`/`rk_…` again. |
+| The board reboots a few seconds after the relay switches on; serial `[BOOT] reset reason BROWNOUT` | The relay coil drags the 3.3 V rail down. Give the relay its own 5 V supply: [hardware.md → Power](hardware.md#power-read-this-if-the-board-reboots). |
 | Every tap ends in **เกิดข้อผิดพลาด** (error) | `wrangler tail`: `amount … != PRICE_SATANG` = the two prices differ; `PRICE_SATANG is missing` = invalid var; `payment provider error (…)` = PromptPay off, non-Thai account, wrong key, or no `RECEIPT_EMAIL`. |
 | Paid, but the screen only changes when the QR runs out | Webhooks don't arrive: check the URL (`/stripe/webhook`), the three events, and that `STRIPE_WEBHOOK_SECRET` belongs to that endpoint in that mode. `wrangler tail` shows `webhook rejected: bad signature` for a wrong secret. The money is safe: the Worker checks Stripe at QR expiry and when the kiosk reconnects. |
 | Relay works backwards | `RELAY_ACTIVE_HIGH = false` in `config.h`. |

@@ -90,8 +90,8 @@ flowchart LR
 
 ติ๊กทีละข้อ แต่ละข้อมีวิธีเช็คว่ามีแล้วจริง
 
-- [ ] **Node.js 20 ขึ้นไป** (ใช้รัน wrangler)
-  เช็ค: เปิด Terminal พิมพ์ `node -v` ต้องเห็นเลข `v20.x.x` หรือสูงกว่า
+- [ ] **Node.js 22.12 ขึ้นไป** (ใช้รัน wrangler)
+  เช็ค: เปิด Terminal พิมพ์ `node -v` ต้องเห็นเลข `v22.12` หรือสูงกว่า (wrangler และ vitest ต้องการ)
   ถ้าขึ้น `command not found` ให้ติดตั้งจาก https://nodejs.org (เลือกรุ่น LTS)
 - [ ] **PlatformIO** (ใช้แฟลชบอร์ด ส่วนเสริม VS Code ก็ได้)
   เช็ค: `~/.platformio/penv/bin/pio --version` ต้องเห็น `PlatformIO Core, version 6.x.x`
@@ -167,7 +167,7 @@ grep -n 'uint32_t PRICE_SATANG\|RUN_SECONDS =' firmware/include/config.h
 - `worker/wrangler.jsonc`: `"PRICE_SATANG"` และ `"RECEIPT_EMAIL"` (ใส่อีเมลร้านของคุณแทน `receipts@example.com`)
 - `firmware/include/config.h`: `PRICE_SATANG` (ให้เท่ากับข้างบน) และ `RUN_SECONDS` (รีเลย์ทำงานกี่วินาทีหลังจ่าย)
 
-**ถ้าสำเร็จจะเห็น** (ตัวอย่างค่าเริ่มต้น)
+**ถ้าสำเร็จจะเห็น** (ราคาเริ่มต้น อีเมลของคุณเอง)
 ```
 14:    "PRICE_SATANG": "2000",
 18:    "RECEIPT_EMAIL": "you@yourshop.com"
@@ -175,6 +175,8 @@ grep -n 'uint32_t PRICE_SATANG\|RUN_SECONDS =' firmware/include/config.h
 12:static constexpr uint32_t RUN_SECONDS = 60;
 ```
 ตัวเลข `PRICE_SATANG` ในสองไฟล์ต้องเหมือนกัน และอีเมลต้องเป็นของคุณ
+(จะเผยแพร่โค้ดของคุณต่อ? คง `receipts@example.com` ไว้ในไฟล์ได้ แล้ว deploy ด้วย
+`npx wrangler deploy --var RECEIPT_EMAIL:you@yourshop.com` แทน ทุกครั้งที่ deploy)
 
 **ถ้าไม่เห็นแบบนั้น**
 - ไม่มีอะไรขึ้นเลย: ไม่ได้อยู่ที่ root ของโปรเจกต์ พิมพ์ `pwd` แล้ว `cd` ไปให้ถูก
@@ -291,6 +293,12 @@ npx wrangler secret put DEVICE_TOKEN
 ```
 ขึ้น `Enter a secret value:` ให้กด ⌘V แล้ว Enter (ตัวอักษรจะไม่แสดง หรือแสดงเป็น `*` เป็นเรื่องปกติ)
 
+> [!WARNING]
+> **ไม่ขึ้น `Enter a secret value:`?** แปลว่าคำสั่งไม่ได้รันในเทอร์มินัลปกติ (เช่น ให้สคริปต์ task ของ IDE หรือผู้ช่วย AI
+> รันให้) wrangler จะอ่านค่าจาก standard input แทน และถ้าไม่มีอะไรส่งเข้าไป จะบันทึก secret **ค่าว่าง** แต่ยังขึ้น `Success!`
+> ให้รันเองใน Terminal หรือส่งค่าจากคลิปบอร์ดเข้าไป: `pbpaste | npx wrangler secret put DEVICE_TOKEN`
+> (และทำแบบเดียวกันกับ `STRIPE_SECRET_KEY` ในขั้น 5.4)
+
 5.4 ใส่กุญแจ Stripe: กลับไปคัดลอก `sk_test_…` จากขั้นที่ 1 แล้ว
 ```bash
 npx wrangler secret put STRIPE_SECRET_KEY
@@ -320,8 +328,10 @@ secret มีผลทันที ไม่ต้อง deploy ใหม่
 **ถ้าไม่เห็นแบบนั้น**
 - `cp: ../firmware/include/secrets.h: File exists` หรือไม่มีอะไรขึ้น: มีไฟล์อยู่แล้ว ไม่เป็นไร เปิดแก้ได้เลย
 - ถามว่าจะสร้าง Worker ใหม่ไหม: คุณไม่ได้อยู่ในโฟลเดอร์ `worker` (wrangler หา `wrangler.jsonc` ไม่เจอ) ตอบ **No** แล้ว `cd worker`
-- `Success!` ขึ้นเสมอ ต่อให้วางค่าผิด wrangler ไม่ตรวจว่ากุญแจ Stripe ใช้ได้จริง ถ้าวางผิดจะรู้ตอนลองจ่าย
-  (ตู้ขึ้น `payment provider error (HTTP 401)`) ให้วางเฉพาะ `sk_test_…` เต็มๆ ไม่มี `"` ไม่มีช่องว่าง
+- `Success!` ขึ้นเสมอ ต่อให้วางค่าผิด wrangler ไม่ตรวจว่ากุญแจ Stripe ใช้ได้จริง ถ้ากุญแจว่าง หรือรูปแบบผิด จะรู้ตอนแตะปุ่มราคา:
+  ตู้ขึ้น `server misconfigured` และ `npx wrangler tail` ขึ้น `STRIPE_SECRET_KEY secret is not set` หรือ
+  `… is not a Stripe secret key` ถ้ารูปแบบถูกแต่เป็นกุญแจผิดตัว จะขึ้น `payment provider error (HTTP 401)`
+  ให้วางเฉพาะ `sk_test_…` เต็มๆ ไม่มี `"` ไม่มีช่องว่าง
 - ไม่แน่ใจว่าวางค่าถูกไหม: ไม่ต้องกลัว ทำ 5.1–5.3 ใหม่ได้เลย ค่าใหม่จะทับค่าเก่า แค่ต้องให้สองที่ตรงกัน
 
 ---
@@ -471,8 +481,9 @@ Hard resetting via RTS pin...
 
 **ถ้าสำเร็จจะเห็น** ตามลำดับนี้
 ```
+[BOOT] reset reason POWERON (1)
 [QRun Lite] lite-1.0.0, price 2000 satang, run 60 s -> wss://qrun-lite.<you>.workers.dev:443
-[WIFI] connected, IP 192.168.1.23
+[WIFI] connected, IP 192.168.1.x
 [WS] connected
 [WS] > {"t":"hello","fw":"lite-1.0.0"}
 [WS] < {"t":"hello","device":"kiosk-01","live":false}
@@ -584,6 +595,9 @@ Hard resetting via RTS pin...
 | อาการ | สาเหตุ | วิธีแก้ |
 |---|---|---|
 | ตู้ **ออนไลน์** ปกติ (มี `[WS] connected` และ hello) แต่แตะปุ่มราคาปุ๊บขึ้น **เกิดข้อผิดพลาด** serial ขึ้น `[ERR] payment provider error (HTTP 401)` และ `[WS] < {"t":"error","ref":"…","msg":"payment provider error (HTTP 401)"}` | `STRIPE_SECRET_KEY` ใน Worker ผิด: ไม่ใช่ Secret key `sk_test_…`/`sk_live_…` เช่น เผลอวาง publishable key `pk_…`, วาง `whsec_…`, คัดลอกมาไม่ครบ, มี `"` หรือช่องว่างติดมา หรือเป็นกุญแจของบัญชี Stripe อื่น | Stripe Dashboard → (Test mode) **Developers → API keys** → Secret key → **Reveal** → คัดลอกทั้งหมด → `cd worker && npx wrangler secret put STRIPE_SECRET_KEY` วาง **เฉพาะตัวกุญแจ** มีผลในไม่กี่วินาที **ไม่ต้องแฟลชใหม่** แล้วแตะปุ่มอีกครั้ง · `npx wrangler tail --format pretty` จะเห็นบรรทัด `(log) create … failed: HTTP 401 …` พร้อมข้อความจาก Stripe (กุญแจถูกปิดบังไว้) |
+| แตะปุ่มแล้วขึ้น **เกิดข้อผิดพลาด**; serial ขึ้น `[ERR] server misconfigured`; tail ขึ้น `STRIPE_SECRET_KEY secret is not set` หรือ `STRIPE_SECRET_KEY is not a Stripe secret key` | กุญแจ Stripe ไม่ได้ตั้งหรือเป็นค่าว่าง (มักเกิดจาก `secret put` ที่ไม่ได้ถามค่า ดูคำเตือนในขั้น 5.3) หรือไม่ใช่ secret key (`pk_…`, `whsec_…`, มี `"`) กรณีนี้ Worker จะไม่เรียก Stripe เลย | ทำขั้น 5.4 ใหม่ในเทอร์มินัลปกติ หรือใช้ `pbpaste \| npx wrangler secret put STRIPE_SECRET_KEY` |
+| tail ขึ้น `DEVICE_TOKEN is too short` และตู้ค้างที่ **กำลังเชื่อมต่อ** | secret `DEVICE_TOKEN` สั้นกว่า 16 ตัวอักษร | ทำขั้น 5.1–5.3 ใหม่ด้วย `openssl rand -hex 24` แล้วแฟลช |
+| **บอร์ดรีสตาร์ทหลังรีเลย์ติดไม่กี่วินาที**; serial ขึ้น `[BOOT] reset reason BROWNOUT` | คอยล์รีเลย์ดึงไฟ 3.3 V ของบอร์ดจนตก | จ่ายไฟรีเลย์จากแหล่ง 5 V แยก และใช้โมดูลรีเลย์ที่มีวงจรขับ: [hardware.md → Power](hardware.md#power-read-this-if-the-board-reboots) |
 | คำสั่ง `npx wrangler …` ขึ้น `✘ [ERROR] Required Worker name missing` | รันคำสั่งนอกโฟลเดอร์ `worker` wrangler จึงหาไฟล์ `wrangler.jsonc` ไม่เจอ | `cd` เข้าโฟลเดอร์ `worker` ก่อนทุกครั้ง เช่น `cd <โฟลเดอร์โปรเจค>/worker && npx wrangler secret put STRIPE_SECRET_KEY` (ห้ามใส่ `--name` เอง เพราะอาจไปสร้าง Worker ใหม่ผิดตัว) |
 | จอขึ้น **กำลังเชื่อมต่อ** ค้าง serial ถึง `[WIFI] connected` แล้วไม่มี `[WS] connected` และ tail ขึ้น `(log) ws auth rejected` | **401 ที่ /ws**: `DEVICE_TOKEN` ใน `secrets.h` ไม่ตรงกับ secret | ทำขั้นที่ 5.1–5.3 ใหม่ให้สองที่เป็นค่าเดียวกัน แล้วแฟลช (ขั้นที่ 7.3) |
 | เหมือนข้างบน แต่ tail ไม่มีอะไรขึ้นเลย | `WS_HOST` ผิด (มี `https://` หรือ `/` ติดมา สะกดผิด) หรือเครือข่ายบล็อก | เทียบกับ URL ตอน deploy, ลอง `curl https://<host>/health` |
@@ -612,6 +626,6 @@ Hard resetting via RTS pin...
 | เปลี่ยนราคา | แก้ `PRICE_SATANG` ทั้ง `worker/wrangler.jsonc` และ `firmware/include/config.h` → `cd worker && npx wrangler deploy` → แฟลช |
 | เปลี่ยนเวลารีเลย์ | แก้ `RUN_SECONDS` ใน `config.h` → แฟลช |
 | ย้ายตู้ไป WiFi ใหม่ | แก้ `WIFI_SSID` / `WIFI_PASS` ใน `secrets.h` → แฟลช |
-| อัปเดตโค้ด Worker | `cd worker && npm test && npx wrangler deploy` |
+| อัปเดตโค้ด Worker | `cd worker && npm test && npx wrangler deploy` (เพิ่ม `--var RECEIPT_EMAIL:…` ถ้าไม่ได้ใส่อีเมลไว้ในไฟล์) |
 | ย้อนกลับ Worker เวอร์ชันก่อน | `cd worker && npx wrangler rollback` |
 | ดูว่ามี secret อะไร (ไม่แสดงค่า) | `cd worker && npx wrangler secret list` |

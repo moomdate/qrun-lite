@@ -23,7 +23,7 @@
 
 | ต้องมี | เช็คด้วย |
 |---|---|
-| Node.js 20 ขึ้นไป | `node -v` |
+| Node.js 22.12 ขึ้นไป | `node -v` |
 | PlatformIO (ส่วนเสริม VS Code หรือ `pip install platformio`) | `pio --version` |
 | บัญชี Cloudflare (สมัครฟรี) | https://dash.cloudflare.com |
 | บัญชี Stripe ที่จดในประเทศไทย | Dashboard → Settings → Business details |
@@ -50,6 +50,10 @@
 | `PRICE_SATANG` | ราคาเดียวที่ตู้เก็บได้ หน่วยสตางค์ (`2000` = ฿20 ขั้นต่ำ `1000`) |
 | `PAYMENT_TTL_SEC` | QR จ่ายได้กี่วินาที (ค่าเริ่มต้น `120`) หมดเวลาแล้ว Worker จะยกเลิกที่ Stripe |
 | `RECEIPT_EMAIL` | อีเมลร้านของคุณ Stripe บังคับให้ทุกรายการพร้อมเพย์มีอีเมล |
+
+> fork ของคุณเป็น public? ไม่ต้อง commit อีเมลก็ได้: คง `receipts@example.com` ไว้ในไฟล์ แล้ว deploy ด้วย
+> `npx wrangler deploy --var RECEIPT_EMAIL:you@yourshop.com` ต้องใส่ **ทุกครั้ง** ที่ deploy เพราะ `wrangler deploy`
+> เฉยๆ จะตั้งค่ากลับเป็นค่าในไฟล์
 
 **`firmware/include/config.h`**:
 
@@ -104,9 +108,20 @@ npx wrangler secret put STRIPE_SECRET_KEY       # วาง sk_test_… (หร�
 | `STRIPE_SECRET_KEY` | Stripe Dashboard → **Developers → API keys** |
 | `STRIPE_WEBHOOK_SECRET` | สร้างในขั้นที่ 5 (ยังไม่ต้องมีตอนนี้) |
 
+- **รันคำสั่ง `wrangler` ทุกคำสั่งในโฟลเดอร์ `worker/`** (ที่มี `wrangler.jsonc`) ถ้ารันที่อื่นจะขึ้น
+  `Required Worker name missing`
 - **Cloudflare เก็บ secret แบบเขียนได้อย่างเดียว** `npx wrangler secret list` แสดงได้แค่ชื่อ ถ้าจำค่าไม่ได้ให้ตั้งใหม่ทับ
 - ตั้ง secret แล้วมีผลทันที ไม่ต้อง deploy ใหม่
 - อย่าวางค่า secret ในแชท อย่า commit ขึ้น Git
+- `secret put` จะถามค่าเฉพาะในเทอร์มินัลปกติ ถ้ารันจากสคริปต์ task ของ IDE หรือเชลล์ของ AI agent มันจะอ่านจาก
+  standard input และถ้าไม่มีอะไรส่งเข้าไป จะเก็บ secret **ค่าว่าง** แต่ยังขึ้น `Success!` ในเชลล์แบบนั้นให้ส่งค่าจากคลิปบอร์ด
+  เข้าไปตรงๆ ค่าจะไม่ถูกพิมพ์หรือแสดงบนจอ:
+  ```bash
+  pbpaste | npx wrangler secret put STRIPE_SECRET_KEY      # macOS (Linux: xclip -o -selection clipboard | …)
+  openssl rand -hex 24 | tr -d '\n' | pbcopy && pbpaste | npx wrangler secret put DEVICE_TOKEN   # token อยู่ในคลิปบอร์ดแล้ว วางใน secrets.h ด้วย
+  ```
+  ถ้าคีย์ยังว่างหรือผิด Worker จะไม่เรียก Stripe และ `wrangler tail` จะขึ้น `STRIPE_SECRET_KEY secret is not set`
+  หรือ `STRIPE_SECRET_KEY is not a Stripe secret key`
 
 ---
 
@@ -178,6 +193,7 @@ pio device monitor
 ```
 ต้องเห็นประมาณนี้:
 ```
+[BOOT] reset reason POWERON (1)
 [QRun Lite] lite-1.0.0, price 2000 satang, run 60 s -> wss://qrun-lite.<you>.workers.dev:443
 [WIFI] connected, IP 192.168.1.x
 [WS] connected
@@ -221,7 +237,7 @@ pi_… succeeded (delivered)
 
 | อยากทำอะไร | ทำอย่างไร |
 |---|---|
-| อัปเดตโค้ด Worker | `cd worker && npm run typecheck && npm test && npm run e2e && npx wrangler deploy` |
+| อัปเดตโค้ด Worker | `cd worker && npm run typecheck && npm test && npm run e2e && npx wrangler deploy` (เพิ่ม `--var RECEIPT_EMAIL:…` ถ้าไม่ได้ใส่อีเมลไว้ในไฟล์) |
 | ย้อนกลับเวอร์ชันก่อน | `cd worker && npx wrangler rollback` |
 | ดูว่ามี secret อะไรบ้าง (ไม่แสดงค่า) | `cd worker && npx wrangler secret list` |
 | เปลี่ยนราคา | แก้ `PRICE_SATANG` **ทั้ง** `wrangler.jsonc` และ `config.h` แล้ว deploy และแฟลช |
@@ -238,7 +254,9 @@ pi_… succeeded (delivered)
 | หัวจอขึ้น **ไม่มี WiFi**, serial ขึ้น `[WIFI] status=1` | หา WiFi ไม่เจอ (เป็น 5 GHz อย่างเดียว หรือพิมพ์ชื่อผิด) |
 | serial ขึ้น `[WIFI] status=4` | รหัส WiFi ผิด |
 | ค้างที่ **กำลังเชื่อมต่อ** | `WS_HOST` ผิด หรือยังไม่ได้ deploy ลอง `curl https://<host>/health` ถ้า `wrangler tail` ขึ้น `ws auth rejected` แปลว่า `DEVICE_TOKEN` ใน `secrets.h` ไม่ตรงกับ secret ถ้าเครือข่ายบล็อก NTP (UDP 123) TLS จะต่อไม่ได้ |
-| `/ws` ตอบ `server misconfigured` | ยังไม่ได้ตั้ง secret `DEVICE_TOKEN` |
+| `/ws` ตอบ `server misconfigured` | ยังไม่ได้ตั้ง secret `DEVICE_TOKEN` หรือสั้นกว่า 16 ตัวอักษร (`wrangler tail` บอกว่ากรณีไหน) |
+| แตะทีไรก็ error; tail ขึ้น `STRIPE_SECRET_KEY secret is not set` / `… is not a Stripe secret key` | คีย์ไม่ได้ตั้ง เป็นค่าว่าง (ดูหมายเหตุ `secret put` ในขั้นที่ 4) หรือไม่ใช่ secret key ตั้ง `sk_…`/`rk_…` ใหม่ให้ครบทั้งตัว |
+| บอร์ดรีบูตหลังรีเลย์ติดไม่กี่วินาที; serial ขึ้น `[BOOT] reset reason BROWNOUT` | คอยล์รีเลย์ดึงไฟ 3.3 V จนตก ให้รีเลย์ใช้ไฟ 5 V แยก: [hardware.md → Power](hardware.md#power-read-this-if-the-board-reboots) |
 | แตะทีไรขึ้น **เกิดข้อผิดพลาด** | ดู `wrangler tail`: `amount … != PRICE_SATANG` = ราคาสองที่ไม่ตรงกัน, `PRICE_SATANG is missing` = ค่าไม่ถูกต้อง, `payment provider error (…)` = ยังไม่เปิด PromptPay / บัญชีไม่ใช่ไทย / key ผิด / ไม่มี `RECEIPT_EMAIL` |
 | จ่ายแล้ว ตู้เปลี่ยนตอน QR หมดเวลาเท่านั้น | webhook ไม่เข้า: เช็ค URL (`/stripe/webhook`), events ทั้ง 3 และ `STRIPE_WEBHOOK_SECRET` ต้องเป็นของ endpoint นั้นในโหมดนั้น `wrangler tail` จะขึ้น `webhook rejected: bad signature` ถ้าใช้ผิดตัว เงินไม่หาย Worker ถาม Stripe ตอน QR หมดอายุและตอนตู้ต่อกลับ |
 | รีเลย์ทำงานกลับด้าน | `RELAY_ACTIVE_HIGH = false` ใน `config.h` |

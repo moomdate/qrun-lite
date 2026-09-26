@@ -91,8 +91,8 @@ email `RECEIPT_EMAIL`.
 
 Tick each item. Each one says how to check you really have it.
 
-- [ ] **Node.js 20 or newer** (runs wrangler)
-  Check: `node -v` shows `v20.x.x` or higher. If you get `command not found`, install the LTS from https://nodejs.org.
+- [ ] **Node.js 22.12 or newer** (runs wrangler)
+  Check: `node -v` shows `v22.12` or higher (wrangler and vitest need it). If you get `command not found`, install the LTS from https://nodejs.org.
 - [ ] **PlatformIO** (flashes the board; the VS Code extension is fine)
   Check: `~/.platformio/penv/bin/pio --version` shows `PlatformIO Core, version 6.x.x`.
 - [ ] **A Cloudflare account** (free at https://dash.cloudflare.com)
@@ -169,7 +169,7 @@ To change the price or email, open both files in VS Code and edit:
 - `worker/wrangler.jsonc`: `"PRICE_SATANG"` and `"RECEIPT_EMAIL"` (your shop email instead of `receipts@example.com`)
 - `firmware/include/config.h`: `PRICE_SATANG` (same as above) and `RUN_SECONDS` (how long the relay runs after payment)
 
-**When it worked you see** (defaults shown)
+**When it worked you see** (default price, your own email)
 ```
 14:    "PRICE_SATANG": "2000",
 18:    "RECEIPT_EMAIL": "you@yourshop.com"
@@ -177,6 +177,8 @@ To change the price or email, open both files in VS Code and edit:
 12:static constexpr uint32_t RUN_SECONDS = 60;
 ```
 The two `PRICE_SATANG` numbers are equal, and the email is yours.
+(Going to publish your copy of the code? You can leave `receipts@example.com` in the file and deploy with
+`npx wrangler deploy --var RECEIPT_EMAIL:you@yourshop.com` instead, on every deploy.)
 
 **If you don't see that**
 - Nothing printed: you're not in the project root. `pwd`, then `cd` to the right place.
@@ -294,6 +296,12 @@ npx wrangler secret put DEVICE_TOKEN
 ```
 At `Enter a secret value:` press ⌘V, then Enter (nothing or `*` is shown while you paste; that's normal).
 
+> [!WARNING]
+> **No `Enter a secret value:` prompt?** Then the command isn't running in a normal terminal (e.g. a script, an IDE
+> task or an AI assistant ran it). wrangler then reads the value from standard input, and with nothing there it
+> saves an **empty** secret and still says `Success!`. Run it yourself in Terminal, or pipe the clipboard in:
+> `pbpaste | npx wrangler secret put DEVICE_TOKEN` (and the same for `STRIPE_SECRET_KEY` in 5.4).
+
 5.4 The Stripe key: copy `sk_test_…` from step 1 again, then
 ```bash
 npx wrangler secret put STRIPE_SECRET_KEY
@@ -324,9 +332,10 @@ Secrets take effect at once. No redeploy needed.
 - `cp: … File exists` or nothing printed: the file already exists. Fine, just edit it.
 - wrangler asks whether to create a new Worker: you're not in the `worker` folder (it can't find `wrangler.jsonc`).
   Answer **No** and `cd worker`.
-- `Success!` appears even if you pasted the wrong thing: wrangler doesn't check that a Stripe key works. A wrong key
-  shows up when you try to pay (`payment provider error (HTTP 401)` on the kiosk). Paste only the full `sk_test_…`,
-  no quotes, no spaces.
+- `Success!` appears even if you pasted the wrong thing: wrangler doesn't check that a Stripe key works. A missing,
+  empty or malformed key shows up when you tap the price: the kiosk says `server misconfigured` and
+  `npx wrangler tail` says `STRIPE_SECRET_KEY secret is not set` or `… is not a Stripe secret key`. A well-formed but
+  wrong key gives `payment provider error (HTTP 401)`. Paste only the full `sk_test_…`, no quotes, no spaces.
 - Not sure you pasted it right: just redo 5.1–5.3. The new value overwrites the old one. Only the two places must match.
 
 ---
@@ -476,8 +485,9 @@ If you missed the first lines, press the **RST** (or EN) button on the board onc
 
 **When it worked you see**, in this order:
 ```
+[BOOT] reset reason POWERON (1)
 [QRun Lite] lite-1.0.0, price 2000 satang, run 60 s -> wss://qrun-lite.<you>.workers.dev:443
-[WIFI] connected, IP 192.168.1.23
+[WIFI] connected, IP 192.168.1.x
 [WS] connected
 [WS] > {"t":"hello","fw":"lite-1.0.0"}
 [WS] < {"t":"hello","device":"kiosk-01","live":false}
@@ -595,6 +605,9 @@ Open the serial monitor (step 8) and `npx wrangler tail --format pretty` side by
 | Symptom | Cause | Fix |
 |---|---|---|
 | Kiosk is **online** (`[WS] connected` and hello are fine), but right after tapping the price it shows **เกิดข้อผิดพลาด** (error); serial shows `[ERR] payment provider error (HTTP 401)` and `[WS] < {"t":"error","ref":"…","msg":"payment provider error (HTTP 401)"}` | `STRIPE_SECRET_KEY` in the Worker is wrong: not the `sk_test_…`/`sk_live_…` Secret key, e.g. the publishable `pk_…` key, a `whsec_…`, a truncated copy, extra quotes/spaces, or a key from another Stripe account | Stripe Dashboard → (Test mode) **Developers → API keys** → Secret key → **Reveal** → copy all of it → `cd worker && npx wrangler secret put STRIPE_SECRET_KEY` and paste **only the key**. It takes effect within seconds, **no reflash**. Tap again. `npx wrangler tail --format pretty` shows `(log) create … failed: HTTP 401 …` with Stripe's message (key redacted). |
+| Tap → **เกิดข้อผิดพลาด**; serial `[ERR] server misconfigured`; tail `STRIPE_SECRET_KEY secret is not set` or `STRIPE_SECRET_KEY is not a Stripe secret key` | The Stripe key is missing or empty (often: `secret put` ran without a prompt, see the warning in step 5.3), or it isn't a secret key (`pk_…`, `whsec_…`, quotes). The Worker doesn't call Stripe at all then. | Step 5.4 again, in a normal terminal or with `pbpaste \| npx wrangler secret put STRIPE_SECRET_KEY` |
+| tail shows `DEVICE_TOKEN is too short` and the kiosk stays on **กำลังเชื่อมต่อ** | The `DEVICE_TOKEN` secret has fewer than 16 characters | Steps 5.1–5.3 with `openssl rand -hex 24`, then flash |
+| The board **restarts a few seconds after the relay clicks on**; serial shows `[BOOT] reset reason BROWNOUT` | The relay coil pulls the board's 3.3 V down | Power the relay from its own 5 V supply and use a relay module with a driver: [hardware.md → Power](hardware.md#power-read-this-if-the-board-reboots) |
 | `npx wrangler …` prints `✘ [ERROR] Required Worker name missing` | The command ran outside the `worker` folder, so wrangler can't find `wrangler.jsonc` | Always `cd` into `worker` first, e.g. `cd <project>/worker && npx wrangler secret put STRIPE_SECRET_KEY`. Don't add `--name` yourself, or you may create a second, wrong Worker. |
 | Screen stuck on **กำลังเชื่อมต่อ** (connecting); serial reaches `[WIFI] connected` but no `[WS] connected`; tail shows `(log) ws auth rejected` | **401 on /ws**: `DEVICE_TOKEN` in `secrets.h` doesn't match the secret | Redo steps 5.1–5.3 so both hold the same value, then flash (step 7.3) |
 | Same, but tail shows nothing at all | `WS_HOST` is wrong (has `https://` or `/`, typo) or the network blocks it | Compare with the deploy URL; try `curl https://<host>/health` |
@@ -624,6 +637,6 @@ troubleshooting in [deploy.en.md](deploy.en.md#troubleshooting).
 | Change the price | Edit `PRICE_SATANG` in both `worker/wrangler.jsonc` and `firmware/include/config.h` → `cd worker && npx wrangler deploy` → flash |
 | Change the relay time | Edit `RUN_SECONDS` in `config.h` → flash |
 | Move the kiosk to another WiFi | Edit `WIFI_SSID` / `WIFI_PASS` in `secrets.h` → flash |
-| Update the Worker code | `cd worker && npm test && npx wrangler deploy` |
+| Update the Worker code | `cd worker && npm test && npx wrangler deploy` (add `--var RECEIPT_EMAIL:…` if you keep your email out of the file) |
 | Roll back to the previous Worker | `cd worker && npx wrangler rollback` |
 | See which secrets exist (no values) | `cd worker && npx wrangler secret list` |

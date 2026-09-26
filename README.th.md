@@ -74,8 +74,9 @@ sequenceDiagram
 ## ฮาร์ดแวร์
 
 - **ESP32-2432S028R** ("CYD" จอ 2.8" ILI9341 + ทัชสกรีน XPT2046) ใช้ลำโพงบนบอร์ดส่งเสียงบี๊บ
-- **โมดูลรีเลย์** (หรือ SSR / MOSFET) ต่อที่ **GPIO 22** ของขั้ว CN1/P3 ลอจิก 3.3 V ใช้ไฟเลี้ยงโหลดแยกต่างหาก
-  ตั้งขาและขั้วได้ที่ [`firmware/include/config.h`](firmware/include/config.h)
+- **โมดูลรีเลย์** (หรือ SSR / MOSFET) ต่อที่ **GPIO 22** ของขั้ว CN1/P3 ลอจิก 3.3 V ใช้ไฟเลี้ยงคอยล์รีเลย์และโหลดแยกต่างหาก
+  **ห้ามเอาไฟจากขา 3.3 V ของ CYD** (บอร์ดจะรีเซ็ตตัวเอง: `BROWNOUT`) ตั้งขาและขั้วได้ที่
+  [`firmware/include/config.h`](firmware/include/config.h)
 - WiFi 2.4 GHz
 
 แผนผังการต่อสาย ขาที่ใช้ และรุ่นของบอร์ด: [docs/hardware.md](docs/hardware.md)
@@ -85,7 +86,7 @@ sequenceDiagram
 ด้านล่างเป็นฉบับย่อ [คู่มือ Deploy ทีละขั้น](docs/deploy.md) มีรายละเอียดเพิ่ม: สิ่งที่ต้องเห็นใน serial และ `wrangler tail`,
 การเปิดใช้เงินจริง, งานดูแลประจำ และค่าใช้จ่าย
 
-ต้องมี: **บัญชี Stripe ที่จดในประเทศไทย**, บัญชี **Cloudflare** แบบฟรี, **Node.js 20 ขึ้นไป** และ **PlatformIO**
+ต้องมี: **บัญชี Stripe ที่จดในประเทศไทย**, บัญชี **Cloudflare** แบบฟรี, **Node.js 22.12 ขึ้นไป** และ **PlatformIO**
 (ส่วนเสริม VS Code หรือ `pip install platformio`)
 
 ### 1. Stripe
@@ -95,12 +96,14 @@ sequenceDiagram
 ### 2. ตั้งค่า
 - [`worker/wrangler.jsonc`](worker/wrangler.jsonc): ใส่อีเมลของคุณที่ `RECEIPT_EMAIL` (Stripe บังคับให้ทุกรายการพร้อมเพย์มีอีเมล)
   เปลี่ยน `PRICE_SATANG` ถ้าต้องการราคาอื่น (หน่วยสตางค์ 2000 = ฿20 ขั้นต่ำ 1000)
+  ถ้าจะเผยแพร่ fork ของคุณและไม่อยากให้อีเมลติดไปด้วย ให้คงค่าตัวอย่างไว้แล้ว deploy ด้วย
+  `npx wrangler deploy --var RECEIPT_EMAIL:you@yourshop.com` แทน (ต้องใส่ทุกครั้ง เพราะ `wrangler deploy` เฉยๆ จะใช้ค่าในไฟล์)
 - [`firmware/include/config.h`](firmware/include/config.h): `PRICE_SATANG` ต้องเป็น **เลขเดียวกัน**
   `RUN_SECONDS` คือเวลาที่รีเลย์ทำงาน
 
 ### 3. Cloudflare Worker
 ```bash
-cd worker
+cd worker                                       # คำสั่ง wrangler ทุกคำสั่งต้องรันในโฟลเดอร์ worker/
 npm install
 npx wrangler login
 npx wrangler deploy                             # จะได้ https://qrun-lite.<subdomain>.workers.dev
@@ -108,6 +111,11 @@ openssl rand -hex 24                            # device token ของคุ�
 npx wrangler secret put DEVICE_TOKEN            # วาง token
 npx wrangler secret put STRIPE_SECRET_KEY       # วาง sk_test_…
 ```
+`secret put` จะถามค่าเฉพาะตอนรันในเทอร์มินัลปกติ ถ้ารันจากสคริปต์ task ของ IDE หรือเชลล์ของ AI agent มันจะอ่านจาก
+standard input แทน และถ้าไม่มีอะไรส่งเข้าไป มันจะเก็บ secret **ค่าว่าง** แต่ยังขึ้น `Success!` กรณีนั้นให้ส่งค่าจาก
+คลิปบอร์ดเข้าไปตรงๆ: `pbpaste | npx wrangler secret put STRIPE_SECRET_KEY` (macOS; บน Linux ใช้
+`xclip -o -selection clipboard`) Worker จะไม่เรียก Stripe ถ้าคีย์ว่างหรือรูปแบบผิด และจะเขียนสาเหตุไว้ใน log
+(ดู [แก้ปัญหา](#แก้ปัญหา))
 
 ### 4. Stripe webhook
 ใน Stripe Dashboard ไปที่ **Developers → Webhooks → Add endpoint**
@@ -155,7 +163,9 @@ stripe listen --forward-to localhost:8787/stripe/webhook   # จะแสดง 
 | ค้างที่ **กำลังเชื่อมต่อ** | ตรวจ `WS_HOST` (ไม่มี `https://` ไม่มี path) และ `WS_PORT 443` ถ้า `DEVICE_TOKEN` ใน `secrets.h` ไม่ตรงกับ secret จะเห็น `ws auth rejected` ใน log ของ Worker (`npx wrangler tail`) TLS ต้องใช้เวลาที่ถูกต้อง ตรวจว่าเครือข่ายไม่บล็อก NTP (UDP 123) |
 | แตะทีไรขึ้น **เกิดข้อผิดพลาด** ทุกครั้ง | ดู `npx wrangler tail`: ถ้าเจอ `amount … != PRICE_SATANG` แปลว่าราคาใน `config.h` กับ `wrangler.jsonc` ไม่ตรงกัน ถ้าเจอ `PRICE_SATANG is missing` แปลว่าค่าไม่ถูกต้อง ถ้าเจอ `payment provider error (…)` แปลว่ายังไม่เปิด PromptPay, บัญชีไม่ใช่ของไทย, คีย์ผิด หรือไม่มี `RECEIPT_EMAIL` |
 | จ่ายแล้ว แต่หน้าจอเปลี่ยนตอนเวลา QR หมดเท่านั้น | webhook มาไม่ถึง ตรวจ URL ของ endpoint, events ทั้งสาม และ `STRIPE_WEBHOOK_SECRET` ต้องเป็น secret ของ endpoint **นั้น** ใน **โหมดนั้น** (test กับ live ไม่เหมือนกัน และ `stripe listen` ก็มีของตัวเอง) ดูการส่งที่ล้มเหลวได้ใน Dashboard เงินไม่หาย เพราะ Worker จะถาม Stripe ตอน QR หมดอายุและตอนตู้ต่อกลับมา |
-| `/ws` ตอบ `server misconfigured` | ยังไม่ได้ตั้ง secret `DEVICE_TOKEN` |
+| `/ws` ตอบ `server misconfigured` | ยังไม่ได้ตั้ง secret `DEVICE_TOKEN` หรือสั้นกว่า 16 ตัวอักษร (`wrangler tail` บอกว่าเป็นกรณีไหน) ใช้ `openssl rand -hex 24` |
+| แตะทีไรขึ้น **เกิดข้อผิดพลาด**; serial ขึ้น `[ERR] server misconfigured`; tail ขึ้น `STRIPE_SECRET_KEY secret is not set` หรือ `… is not a Stripe secret key` | คีย์ Stripe ไม่ได้ตั้ง เป็นค่าว่าง (ดูหมายเหตุ `secret put` ในขั้นที่ 3) หรือไม่ใช่ secret key (`pk_…`, `whsec_…`, มีเครื่องหมายคำพูด) ตั้งใหม่ด้วย `sk_…`/`rk_…` ให้ครบทั้งตัว Worker จะไม่เรียก Stripe ถ้าคีย์ดูไม่ถูกต้อง |
+| **บอร์ดรีบูตหลังรีเลย์ติดไม่กี่วินาที**; serial ขึ้น `[BOOT] reset reason BROWNOUT` | คอยล์รีเลย์ดึงไฟ 3.3 V จนตก ให้จ่ายไฟรีเลย์จากแหล่ง 5 V แยก และใช้โมดูลที่มีวงจรขับกับไดโอดกันไฟย้อน: [docs/hardware.md → Power](docs/hardware.md#power-read-this-if-the-board-reboots) |
 | รีเลย์ทำงานกลับด้าน | ตั้ง `RELAY_ACTIVE_HIGH = false` ใน `config.h` (บอร์ดรีเลย์แบบ low-trigger) |
 | แตะไม่ตรง / สีเพี้ยนกลับด้าน | บอร์ด CYD บางรุ่นต่างกัน ปรับ `touch.setCal(...)` ใน `firmware/src/hw.cpp` หรือ `TFT_INVERSION_ON` ใน `platformio.ini` รุ่น "CYD2USB" (มีพอร์ต USB 2 ช่อง) ใช้ไดรเวอร์จอคนละตัว |
 | ใช้ Worker กับโดเมนของตัวเองแล้วต่อ TLS ไม่ได้ | `firmware/include/root_ca.h` ปักหมุด root CA ที่ Cloudflare ใช้กับ `*.workers.dev` (Google Trust Services, Let's Encrypt) ถ้าใบรับรองของคุณใช้ root อื่นให้เพิ่มเข้าไป |
@@ -166,9 +176,12 @@ stripe listen --forward-to localhost:8787/stripe/webhook   # จะแสดง 
 cd worker && npm run typecheck && npm test && npm run e2e   # unit test + end-to-end กับ Stripe จำลอง
 cd firmware && pio test -e native && pio run               # ทดสอบลอจิกของตู้บนคอมพิวเตอร์ + build สำหรับบอร์ด
 ```
-unit test ครอบคลุมการตรวจลายเซ็น webhook, การตรวจ device token, การบังคับราคา และการเปลี่ยนสถานะการจ่ายเงินทุกแบบ
-ส่วน e2e จะรัน `wrangler dev` กับ Stripe จำลองในเครื่อง และเล่นเป็นตู้ผ่าน WebSocket จริง: จ่ายสำเร็จ, ราคาผิด, ยกเลิก,
-หมดอายุ, จ่ายตอนตู้หลุดเน็ต, token ผิด และลายเซ็นผิด การทดสอบไม่เรียก Stripe จริงและไม่อ่าน `.dev.vars` ของคุณ
+unit test ครอบคลุมการตรวจลายเซ็น webhook, การตรวจ device token, การบังคับราคา, การปฏิเสธเมื่อตั้งค่าผิด (fail closed)
+และการเปลี่ยนสถานะการจ่ายเงินทุกแบบ ส่วน e2e จะรัน `wrangler dev` กับ Stripe จำลองในเครื่อง และเล่นเป็นตู้ผ่าน WebSocket จริง:
+จ่ายสำเร็จ, ราคาผิด, ยกเลิก, หมดอายุ, จ่ายตอนตู้หลุดเน็ต, token ผิด, ลายเซ็นผิดหรือถูกส่งซ้ำ, ยกเลิกแล้วสร้างใหม่ทันที,
+สร้างใหม่ทับ QR ที่ค้าง, จ่ายเงินชนกับการยกเลิก, บอร์ดรีบูตระหว่างมี QR ค้าง, เฟรมเสียหรือใหญ่เกิน และ Worker ที่ไม่มีคีย์ Stripe
+การทดสอบไม่เรียก Stripe จริงและไม่อ่าน `.dev.vars` ของคุณ GitHub Actions รันทั้งหมดทุกครั้งที่ push
+([ci.yml](.github/workflows/ci.yml))
 
 ## เรื่องความปลอดภัย
 
@@ -179,6 +192,8 @@ unit test ครอบคลุมการตรวจลายเซ็น web
   ตู้ไม่เคยเห็นข้อความ error ของ Stripe และ log ของ Worker จะปิดบังคีย์ไว้
 - เฟิร์มแวร์ตรวจ TLS กับ root certificate ที่ปักหมุดไว้ `WS_USE_TLS 0` ใช้ตอนพัฒนาเท่านั้น
 - รีเลย์มีตัวจับเวลาฮาร์ดแวร์ที่ปิดรีเลย์เมื่อครบ `RUN_SECONDS` แม้ลูปหลักจะค้าง
+
+โมเดลภัยคุกคาม ความเสี่ยงที่ยังเหลือ และวิธีแจ้งช่องโหว่: [SECURITY.md](SECURITY.md)
 
 ## Lite กับ Pro ต่างกันอย่างไร
 
@@ -197,8 +212,8 @@ QRun Lite ใช้งานได้ครบสำหรับตู้เด�
 | ข้อความ error | ข้อความเดียว | ข้อความภาษาไทยเฉพาะแต่ละสาเหตุ |
 | เสียง | บี๊บตอนจ่ายสำเร็จ และบี๊บตอนผิดพลาด | เสียงเพลง, เสียงนับถอยหลังวินาทีสุดท้าย, เสียงจบงาน |
 | เครื่องมือ | – | โหมด `KIOSK_DEBUG` สำหรับพรีวิวและจับภาพหน้าจอ, สคริปต์นำเข้าและ deploy secret, ชี้เฟิร์มแวร์, รัน `stripe listen`, สลับโหมดทดสอบ |
-| การทดสอบ | unit, e2e 7 กรณี, ทดสอบลอจิกบนคอมพิวเตอร์ | + ชุด e2e จำลองการโจมตี, contract test ระหว่างเฟิร์มแวร์กับ Worker, ทดสอบ Durable Object ถูก evict, ทดสอบ state machine ของตู้ |
-| เอกสาร | README นี้, [PROTOCOL.md](PROTOCOL.md), [แผนภาพ](docs/architecture.svg), คู่มือ deploy ([TH](docs/deploy.md) / [EN](docs/deploy.en.md)), [ฮาร์ดแวร์](docs/hardware.md) | + เอกสารสถาปัตยกรรมสำหรับหลายตู้, โมเดลความปลอดภัยฉบับเต็ม |
+| การทดสอบ | unit, e2e 13 กรณี, ทดสอบลอจิกบนคอมพิวเตอร์, CI | + ชุด e2e จำลองการโจมตี, contract test ระหว่างเฟิร์มแวร์กับ Worker, ทดสอบ Durable Object ถูก evict, ทดสอบ state machine ของตู้ |
+| เอกสาร | README นี้, [PROTOCOL.md](PROTOCOL.md), [แผนภาพ](docs/architecture.svg), คู่มือ deploy ([TH](docs/deploy.md) / [EN](docs/deploy.en.md)), [ฮาร์ดแวร์](docs/hardware.md), [ความปลอดภัย](SECURITY.md) | + เอกสารสถาปัตยกรรมสำหรับหลายตู้, โมเดลความปลอดภัยฉบับเต็ม |
 
 ## รับ QRun Pro
 
@@ -208,4 +223,5 @@ _[ใส่ช่องทางติดต่อที่นี่]_
 ## สัญญาอนุญาต
 
 [MIT](LICENSE) © 2026 moomdate ฟอนต์ Sarabun ใน `firmware/src/fonts/` ใช้สัญญาอนุญาต
-[SIL Open Font License 1.1](firmware/src/fonts/OFL.txt)
+[SIL Open Font License 1.1](firmware/src/fonts/OFL.txt) ส่วนประกอบของบุคคลที่สามและสัญญาอนุญาต:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)

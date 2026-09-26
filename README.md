@@ -76,8 +76,9 @@ Captured from a real board (320×240). The QR in these pictures is fake preview 
 ## Hardware
 
 - **ESP32-2432S028R** ("CYD", 2.8" ILI9341 display + XPT2046 touch). The on-board speaker beeps.
-- A **relay module** (or SSR / MOSFET driver) on **GPIO 22** of the CN1/P3 connector, 3.3 V logic. Power the load
-  separately. Pin and polarity: [`firmware/include/config.h`](firmware/include/config.h).
+- A **relay module** (or SSR / MOSFET driver) on **GPIO 22** of the CN1/P3 connector, 3.3 V logic. Power the relay
+  coil and the load separately, **not from the CYD's 3.3 V pin** (that resets the board: `BROWNOUT`). Pin and
+  polarity: [`firmware/include/config.h`](firmware/include/config.h).
 - A 2.4 GHz WiFi network.
 
 Wiring diagram, pins and board variants: [docs/hardware.md](docs/hardware.md).
@@ -87,7 +88,7 @@ Wiring diagram, pins and board variants: [docs/hardware.md](docs/hardware.md).
 The short version is below. The [step-by-step deploy guide](docs/deploy.en.md) ([ภาษาไทย](docs/deploy.md)) adds
 what to expect on the serial log and in `wrangler tail`, going live, maintenance and costs.
 
-You need: a **Stripe account registered in Thailand**, a free **Cloudflare** account, **Node.js 20+** and
+You need: a **Stripe account registered in Thailand**, a free **Cloudflare** account, **Node.js 22.12+** and
 **PlatformIO** (VS Code extension or `pip install platformio`).
 
 ### 1. Stripe
@@ -97,12 +98,15 @@ You need: a **Stripe account registered in Thailand**, a free **Cloudflare** acc
 ### 2. Settings
 - [`worker/wrangler.jsonc`](worker/wrangler.jsonc): set `RECEIPT_EMAIL` to your email (Stripe requires one on
   every PromptPay payment). Change `PRICE_SATANG` if you want a different price (2000 = ฿20, minimum 1000).
+  Publishing your fork and don't want your email in it? Leave the placeholder and deploy with
+  `npx wrangler deploy --var RECEIPT_EMAIL:you@yourshop.com` instead (every time: a plain `wrangler deploy` puts the
+  file's value back).
 - [`firmware/include/config.h`](firmware/include/config.h): `PRICE_SATANG` must be **the same number**.
   `RUN_SECONDS` is how long the relay runs.
 
 ### 3. Cloudflare Worker
 ```bash
-cd worker
+cd worker                                       # every wrangler command runs in worker/
 npm install
 npx wrangler login
 npx wrangler deploy                             # prints https://qrun-lite.<your-subdomain>.workers.dev
@@ -110,6 +114,11 @@ openssl rand -hex 24                            # your device token: keep it for
 npx wrangler secret put DEVICE_TOKEN            # paste the token
 npx wrangler secret put STRIPE_SECRET_KEY       # paste sk_test_…
 ```
+`secret put` asks for the value only in an interactive terminal. Run from a script, an IDE task or an AI agent's
+shell it reads standard input instead, and with nothing piped in it stores an **empty** secret and still prints
+`Success!`. There, pipe the value in from the clipboard: `pbpaste | npx wrangler secret put STRIPE_SECRET_KEY`
+(macOS; `xclip -o -selection clipboard` on Linux). The Worker refuses to call Stripe with a missing or malformed
+key and logs why (see [Troubleshooting](#troubleshooting)).
 
 ### 4. Stripe webhook
 In the Stripe Dashboard, go to **Developers → Webhooks → Add endpoint**:
@@ -157,7 +166,9 @@ token travels unencrypted).
 | Stuck on **กำลังเชื่อมต่อ** (connecting) | Check `WS_HOST` (no `https://`, no path) and `WS_PORT 443`. The Worker log (`npx wrangler tail`) shows `ws auth rejected` if `DEVICE_TOKEN` differs between `secrets.h` and the secret. TLS needs the time: make sure NTP (UDP 123) isn't blocked. |
 | Every tap ends in **เกิดข้อผิดพลาด** (error) | `npx wrangler tail`: `amount … != PRICE_SATANG` means the price differs between `config.h` and `wrangler.jsonc`. `PRICE_SATANG is missing` means the var is invalid. `payment provider error (…)`: PromptPay isn't enabled, the account isn't Thai, the key is wrong, or `RECEIPT_EMAIL` is missing. |
 | Paid, but the screen changes only when the QR timer runs out | The webhook doesn't arrive. Check the endpoint URL, the three events, and that `STRIPE_WEBHOOK_SECRET` is the secret of **that** endpoint in **that** mode (test and live differ; `stripe listen` has its own). The Dashboard shows failed deliveries. Money is safe: the Worker checks Stripe when the QR expires and when the kiosk reconnects. |
-| `server misconfigured` from `/ws` | The `DEVICE_TOKEN` secret isn't set. |
+| `server misconfigured` from `/ws` | The `DEVICE_TOKEN` secret isn't set, or it is shorter than 16 characters (`wrangler tail` says which). Use `openssl rand -hex 24`. |
+| Every tap ends in **เกิดข้อผิดพลาด**; serial `[ERR] server misconfigured`; tail `STRIPE_SECRET_KEY secret is not set` or `… is not a Stripe secret key` | The Stripe key is missing, empty (see the `secret put` note in step 3) or not a secret key (`pk_…`, `whsec_…`, quotes). Set it again with the full `sk_…`/`rk_…`. The Worker never calls Stripe without a valid-looking key. |
+| The board **reboots a few seconds after the relay switches on**; serial shows `[BOOT] reset reason BROWNOUT` | The relay coil pulls the 3.3 V rail down. Power the relay from its own 5 V supply, use a module with a driver and flyback diode: [docs/hardware.md → Power](docs/hardware.md#power-read-this-if-the-board-reboots). |
 | Relay works backwards | Set `RELAY_ACTIVE_HIGH = false` in `config.h` (low-trigger relay boards). |
 | Touch is off / colours are inverted | Some CYD versions differ. Adjust `touch.setCal(...)` in `firmware/src/hw.cpp` or `TFT_INVERSION_ON` in `platformio.ini`. The 2-USB-port "CYD2USB" uses a different display driver. |
 | Worker on a custom domain can't connect over TLS | `firmware/include/root_ca.h` pins the roots Cloudflare uses for `*.workers.dev` (Google Trust Services, Let's Encrypt). Add your certificate's root if it's different. |
@@ -168,10 +179,12 @@ token travels unencrypted).
 cd worker && npm run typecheck && npm test && npm run e2e   # unit tests + end-to-end against a mock Stripe
 cd firmware && pio test -e native && pio run               # host tests of the kiosk logic + device build
 ```
-The unit tests cover webhook signatures, the device token check, price enforcement and every payment state
-transition. The e2e test runs `wrangler dev` against a local mock Stripe and plays the kiosk over a real
-WebSocket: happy path, wrong price, cancel, expiry, payment while offline, bad token and bad signature. The tests
-never call real Stripe and never read your `.dev.vars`.
+The unit tests cover webhook signatures, the device token check, price enforcement, fail-closed configuration and
+every payment state transition. The e2e test runs `wrangler dev` against a local mock Stripe and plays the kiosk
+over a real WebSocket: happy path, wrong price, cancel, expiry, payment while offline, bad token, bad or replayed
+signature, cancel-then-create, a create replacing a pending QR, a payment racing a cancel, a reboot while a QR is
+pending, malformed and oversized frames, and a Worker without its Stripe key. The tests never call real Stripe and
+never read your `.dev.vars`. GitHub Actions runs all of it on every push ([ci.yml](.github/workflows/ci.yml)).
 
 ## Security notes
 
@@ -182,6 +195,8 @@ never call real Stripe and never read your `.dev.vars`.
   300 s tolerance. Devices never see Stripe's error texts, and the Worker log redacts keys.
 - The firmware checks TLS against pinned root certificates. `WS_USE_TLS 0` is for local development only.
 - The relay has a hardware timer that switches it off after `RUN_SECONDS`, even if the main loop hangs.
+
+Threat model, residual risks and how to report a vulnerability: [SECURITY.md](SECURITY.md).
 
 ## Lite vs Pro
 
@@ -200,8 +215,8 @@ features are **not in the Lite code** (they were removed, not switched off):
 | Error messages | one generic message | a specific Thai message per cause |
 | Sound | one paid beep, one error beep | chimes, last-seconds countdown ticks, "done" chime |
 | Tooling | – | `KIOSK_DEBUG` preview and screenshot tool; scripts to import and deploy secrets, point the firmware, run `stripe listen`, switch to test mode |
-| Tests | unit, 7 e2e scenarios, native logic tests | + attack e2e suite, firmware ⇄ Worker contract tests, Durable Object eviction tests, kiosk state-machine tests |
-| Docs | this README, [PROTOCOL.md](PROTOCOL.md), [architecture diagram](docs/architecture.svg), deploy guide ([EN](docs/deploy.en.md) / [TH](docs/deploy.md)), [hardware notes](docs/hardware.md) | + architecture write-up for multi-kiosk setups, full security model |
+| Tests | unit, 13 e2e scenarios, native logic tests, CI | + attack e2e suite, firmware ⇄ Worker contract tests, Durable Object eviction tests, kiosk state-machine tests |
+| Docs | this README, [PROTOCOL.md](PROTOCOL.md), [architecture diagram](docs/architecture.svg), deploy guide ([EN](docs/deploy.en.md) / [TH](docs/deploy.md)), [hardware notes](docs/hardware.md), [security notes](SECURITY.md) | + architecture write-up for multi-kiosk setups, full security model |
 
 ## Get QRun Pro
 
@@ -211,4 +226,5 @@ available from the author, moomdate. Contact: _[add contact details here]_.
 ## License
 
 [MIT](LICENSE), © 2026 moomdate. The Sarabun font in `firmware/src/fonts/` is under the
-[SIL Open Font License 1.1](firmware/src/fonts/OFL.txt).
+[SIL Open Font License 1.1](firmware/src/fonts/OFL.txt). Third-party components and their licenses:
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
