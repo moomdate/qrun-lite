@@ -154,17 +154,17 @@ void loop() {
       cancelling = true;
       cancelAt = now;
       dirty = true;
-    } else if (screen == MESSAGE && now - since > 600) {
+    } else if (screen == MESSAGE && elapsedMs(now, since) > 600) {
       go(IDLE);
     }
   }
 
   switch (screen) {
     case CREATING:
-      if (now - since > CREATE_TIMEOUT_MS) showMessage(MSG_ERROR);
+      if (elapsedMs(now, since) > CREATE_TIMEOUT_MS) showMessage(MSG_ERROR);
       break;
     case QR:
-      if (cancelling && now - cancelAt > CANCEL_TIMEOUT_MS) go(IDLE);   // a late "succeeded" still runs
+      if (cancelling && elapsedMs(now, cancelAt) > CANCEL_TIMEOUT_MS) go(IDLE);   // a late "succeeded" still runs
       else if ((int32_t)(now - qrDeadline) > (int32_t)QR_GRACE_MS) showMessage(MSG_EXPIRED);
       break;
     case RUNNING:
@@ -175,7 +175,7 @@ void loop() {
       }
       break;
     case MESSAGE:
-      if (now - since > MESSAGE_MS) go(IDLE);
+      if (elapsedMs(now, since) > MESSAGE_MS) go(IDLE);
       break;
     default:
       break;

@@ -73,6 +73,13 @@ inline Message messageFor(const char* status) {
   return MSG_ERROR;
 }
 
+// Milliseconds from `since` to `now`, 0 if `since` is later (it was stamped after `now` was read, e.g. a screen
+// change in the same loop pass). A plain `now - since` on uint32_t wraps to ~4.29e9 there and fires every timeout.
+inline uint32_t elapsedMs(uint32_t now, uint32_t since) {
+  int32_t d = (int32_t)(now - since);
+  return d < 0 ? 0 : (uint32_t)d;
+}
+
 // Resistive touch glitches (noise at power-up, a finger sliding) must not count as taps: a tap is a press
 // held continuously for TAP_HOLD_MS at a point on the screen, and counts once per press.
 struct TapFilter {

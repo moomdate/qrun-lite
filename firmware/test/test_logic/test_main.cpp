@@ -97,6 +97,12 @@ void test_config() {
   TEST_ASSERT_TRUE(cfg::RUN_SECONDS >= 1);
 }
 
+static void test_elapsed_never_wraps() {
+  TEST_ASSERT_EQUAL_UINT32(0, elapsedMs(1000, 1005));          // stamped after `now`: the bug that showed "error" at once
+  TEST_ASSERT_EQUAL_UINT32(250, elapsedMs(1250, 1000));
+  TEST_ASSERT_EQUAL_UINT32(20, elapsedMs(10, 0xFFFFFFF6u));    // across the 49-day millis() wrap
+}
+
 static void test_tap_filter() {
   TapFilter f;
   TEST_ASSERT_FALSE(f.update(true, 1000, 100, 100));    // press starts
@@ -122,6 +128,7 @@ int main() {
   RUN_TEST(test_formatting);
   RUN_TEST(test_qr_version);
   RUN_TEST(test_tap_filter);
+  RUN_TEST(test_elapsed_never_wraps);
   RUN_TEST(test_config);
   return UNITY_END();
 }
