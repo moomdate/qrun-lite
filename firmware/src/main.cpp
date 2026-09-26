@@ -33,6 +33,7 @@ static constexpr uint32_t CREATE_TIMEOUT_MS = 20000;   // no answer to a create
 static constexpr uint32_t CANCEL_TIMEOUT_MS = 10000;   // no answer to a cancel: back to IDLE (the QR expires anyway)
 static constexpr uint32_t QR_GRACE_MS = 15000;         // the Worker should report "expired" first
 static constexpr uint32_t MESSAGE_MS = 4000;
+static constexpr uint32_t BOOT_TAP_GUARD_MS = 1500;   // ignore touch noise while the panel powers up
 static constexpr uint32_t FALLBACK_TTL_SEC = 120;      // QR countdown before NTP time is known
 
 static Screen screen = IDLE;
@@ -41,7 +42,16 @@ static uint32_t since = 0, qrDeadline = 0, runUntil = 0, cancelAt = 0, lastDraw 
 static bool wifi = false, online = false, live = true, cancelling = false, dirty = true;
 static Message message = MSG_ERROR;
 
+static const char* screenName(Screen s) {
+  switch (s) {
+    case IDLE: return "idle"; case CREATING: return "creating"; case QR: return "qr";
+    case RUNNING: return "running"; case MESSAGE: return "message";
+  }
+  return "?";
+}
+
 static void go(Screen s) {
+  if (s != screen) Serial.printf("[UI] %s -> %s\n", screenName(screen), screenName(s));
   screen = s;
   since = millis();
   dirty = true;
@@ -83,6 +93,10 @@ static void onPayment(const char* id, const char* r, const char* data, int64_t e
     case REJECT_QR:
       net::cancel(id);
       showMessage(MSG_ERROR);
+      break;
+    case DISCARD_QR:
+      Serial.printf("[PAY] %s pending from before, not shown: cancelling\n", id);
+      net::cancel(id);
       break;
     default:
       break;
@@ -128,7 +142,8 @@ void loop() {
   uint32_t now = millis();
 
   int x, y;
-  if (hw::tapped(x, y)) {
+  if (hw::tapped(x, y) && now > BOOT_TAP_GUARD_MS) {
+    Serial.printf("[TAP] %d,%d on %s\n", x, y, screenName(screen));
     if (screen == IDLE && online && ui::hitPrice(x, y)) {
       formatRef(esp_random(), esp_random(), ref, sizeof ref);
       pi[0] = 0;

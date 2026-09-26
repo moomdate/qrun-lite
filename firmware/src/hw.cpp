@@ -5,6 +5,7 @@
 #include <TFT_Touch.h>
 #include <esp_timer.h>
 #include "config.h"
+#include "logic.h"
 
 namespace hw {
 namespace {
@@ -14,7 +15,7 @@ constexpr int PIN_LED_R = 4, PIN_LED_G = 16, PIN_LED_B = 17;   // RGB LED, activ
 
 TFT_Touch touch(33, 25, 32, 39);
 esp_timer_handle_t stopTimer = nullptr;
-bool prevTouch = false, prevWifi = false;
+bool prevWifi = false;
 uint32_t beepEnd = 0, lastWifiLog = 0;
 
 void relaySet(bool on) { digitalWrite(cfg::RELAY_PIN, on == cfg::RELAY_ACTIVE_HIGH ? HIGH : LOW); }
@@ -63,11 +64,12 @@ void pump() {
 }
 
 bool tapped(int& x, int& y) {
+  static lite::TapFilter filter;
   bool p = touch.Pressed();
-  bool tap = p && !prevTouch;
-  if (tap) { x = touch.X(); y = touch.Y(); }
-  prevTouch = p;
-  return tap;
+  int tx = p ? touch.X() : -1, ty = p ? touch.Y() : -1;
+  if (!filter.update(p, millis(), tx, ty)) return false;
+  x = tx; y = ty;
+  return true;
 }
 
 void wifiBegin(const char* ssid, const char* pass) {

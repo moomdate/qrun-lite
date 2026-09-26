@@ -16,7 +16,7 @@ void test_payment_is_shown_only_when_ours() {
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(CREATING, "r1"), "pi_1", "r0", "QR"));      // answer to an older create
   TEST_ASSERT_EQUAL(SHOW_QR, onPayment(at(QR, "r1", "pi_1"), "pi_1", "r1", "QR"));   // re-sent after reconnect
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(QR, "r1", "pi_1"), "pi_2", "r2", "QR"));
-  TEST_ASSERT_EQUAL(SHOW_QR, onPayment(at(IDLE), "pi_1", "r1", "QR"));               // pending after a reboot
+  TEST_ASSERT_EQUAL(DISCARD_QR, onPayment(at(IDLE), "pi_1", "r1", "QR"));            // pending after a reboot: cancel, don't pop up
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(RUNNING), "pi_1", "r1", "QR"));
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(MESSAGE), "pi_1", "r1", "QR"));
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(CREATING, "r1"), "", "r1", "QR"));
@@ -97,6 +97,20 @@ void test_config() {
   TEST_ASSERT_TRUE(cfg::RUN_SECONDS >= 1);
 }
 
+static void test_tap_filter() {
+  TapFilter f;
+  TEST_ASSERT_FALSE(f.update(true, 1000, 100, 100));    // press starts
+  TEST_ASSERT_FALSE(f.update(true, 1020, 100, 100));    // 20 ms: not yet
+  TEST_ASSERT_FALSE(f.update(false, 1025, -1, -1));     // glitch released: nothing
+  TEST_ASSERT_FALSE(f.update(true, 2000, 100, 100));
+  TEST_ASSERT_TRUE(f.update(true, 2045, 100, 100));     // held 45 ms: one tap
+  TEST_ASSERT_FALSE(f.update(true, 2500, 100, 100));    // still held: no repeat
+  TEST_ASSERT_FALSE(f.update(false, 2600, -1, -1));
+  TEST_ASSERT_FALSE(f.update(true, 3000, 400, 100));
+  TEST_ASSERT_FALSE(f.update(true, 3100, 400, 100));    // off-screen reading: ignored
+  TEST_ASSERT_TRUE(f.update(true, 3150, 200, 100));     // same press, now on screen
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_payment_is_shown_only_when_ours);
@@ -107,6 +121,7 @@ int main() {
   RUN_TEST(test_seconds_left);
   RUN_TEST(test_formatting);
   RUN_TEST(test_qr_version);
+  RUN_TEST(test_tap_filter);
   RUN_TEST(test_config);
   return UNITY_END();
 }

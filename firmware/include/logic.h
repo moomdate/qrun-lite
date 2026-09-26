@@ -30,6 +30,7 @@ enum Action : uint8_t {
   IGNORE,
   SHOW_QR,        // show this payment's QR
   REJECT_QR,      // ours, but too big to keep: cancel it and show an error
+  DISCARD_QR,     // a pending payment we did not ask for (e.g. after a reboot): cancel it quietly
   RUN,            // paid: switch the relay on
   SHOW_RESULT,    // canceled / expired / failed: show the message
   SHOW_ERROR,     // our create failed
@@ -39,9 +40,12 @@ enum Action : uint8_t {
 // {"t":"payment", pi, ref, qr}
 inline Action onPayment(const State& s, const char* pi, const char* ref, const char* qr) {
   if (empty(pi) || empty(qr)) return IGNORE;
+  // Still pending after a reboot: nobody is standing at the kiosk waiting for that QR any more, so don't pop it
+  // up on its own — cancel it. If the customer had already paid, the cancel is refused and the Worker sends
+  // "succeeded", which runs the relay as usual.
+  if (s.screen == IDLE) return DISCARD_QR;
   bool ours = (s.screen == CREATING && same(ref, s.ref)) ||
-              (s.screen == QR && same(pi, s.pi)) ||   // re-sent after a reconnect
-              s.screen == IDLE;                       // still pending after a reboot
+              (s.screen == QR && same(pi, s.pi));     // re-sent after a reconnect
   if (!ours) return IGNORE;
   return strlen(pi) <= PI_MAX && strlen(qr) <= QR_MAX ? SHOW_QR : REJECT_QR;
 }
@@ -68,6 +72,22 @@ inline Message messageFor(const char* status) {
   if (same(status, "failed")) return MSG_FAILED;
   return MSG_ERROR;
 }
+
+// Resistive touch glitches (noise at power-up, a finger sliding) must not count as taps: a tap is a press
+// held continuously for TAP_HOLD_MS at a point on the screen, and counts once per press.
+struct TapFilter {
+  static constexpr uint32_t TAP_HOLD_MS = 40;
+  uint32_t downAt = 0;
+  bool down = false, fired = false;
+  bool update(bool pressed, uint32_t now, int x, int y) {
+    if (!pressed) { down = fired = false; return false; }
+    if (!down) { down = true; downAt = now; return false; }
+    if (fired || now - downAt < TAP_HOLD_MS) return false;
+    if (x < 0 || x >= 320 || y < 0 || y >= 240) return false;
+    fired = true;
+    return true;
+  }
+};
 
 // Seconds a QR has left: from the Worker's `expires` (unix s) when the clock is NTP-synced, else `fallback`.
 inline uint32_t secondsLeft(int64_t expires, int64_t now, uint32_t fallback) {
