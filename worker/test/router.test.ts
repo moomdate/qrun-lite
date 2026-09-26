@@ -124,12 +124,12 @@ describe("webhook", () => {
     const { env } = envWithDo();
     (env.TERMINAL.get as unknown as () => { fetch: () => Promise<Response> }) = () => ({
       fetch: async () => {
-        throw new Error("internal detail sk_live_SECRET123");
+        throw new Error("internal detail sk_live_FAKE1 whsec_FAKE2");
       },
     });
     const r = await call(post(body, await signed(body)), env);
     expect([r.status, await r.text()]).toEqual([500, "retry"]);
-    expect(spy.mock.calls.map((c) => String(c[0])).join()).not.toContain("SECRET123");
+    expect(spy.mock.calls.map((c) => String(c[0])).join()).not.toMatch(/FAKE1|FAKE2/);
     spy.mockRestore();
   });
 
