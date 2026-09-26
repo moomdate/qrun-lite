@@ -1,5 +1,7 @@
 # Deploying QRun Lite (step by step)
 
+> **New to Cloudflare or Stripe? Start with [start-here.en.md](start-here.en.md)** (every step explains what it does and what you should see).
+
 **English** · [ภาษาไทย](deploy.md)
 
 This guide puts the QRun Lite Worker on Cloudflare and flashes the board to connect to it. The kiosk then runs

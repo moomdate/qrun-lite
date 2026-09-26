@@ -5,6 +5,9 @@
 
 [English](README.md) · **ภาษาไทย**
 
+> **มือใหม่เริ่มที่นี่: [docs/start-here.md](docs/start-here.md)** คู่มือติดตั้งทีละขั้นสำหรับคนที่ไม่เคยใช้ Cloudflare / Stripe / Terminal
+> บอกทุกขั้นว่าทำอะไร ทำไม และถ้าสำเร็จจะเห็นอะไร ([English](docs/start-here.en.md))
+
 หน้าจอมีปุ่มราคาเดียว (ค่าเริ่มต้น **฿20**) ลูกค้าแตะปุ่ม สแกน **QR พร้อมเพย์** ด้วยแอปธนาคารไหนก็ได้ แล้วจ่ายเงิน
 จากนั้นตู้จะเปิด **รีเลย์** ตามเวลาที่ตั้งไว้ (ค่าเริ่มต้น 60 วินาที) พร้อมนับถอยหลัง แล้วกลับไปหน้าปุ่ม
 ถ้ายกเลิก จ่ายไม่สำเร็จ หรือ QR หมดอายุ จะขึ้นข้อความสั้นๆ แทน
@@ -20,7 +23,7 @@ QRun Lite คือรุ่นเล็กที่อ่านโค้ดง�
 
 ![แผนภาพ QRun Lite: ตู้, Cloudflare Worker และ Durable Object, Stripe](docs/architecture.svg)
 
-**เอกสาร:** [คู่มือ Deploy](docs/deploy.md) ([English](docs/deploy.en.md)) · [ฮาร์ดแวร์และการต่อรีเลย์](docs/hardware.md) (อังกฤษ) ·
+**เอกสาร:** [เริ่มที่นี่ (มือใหม่)](docs/start-here.md) · [คู่มือ Deploy](docs/deploy.md) ([English](docs/deploy.en.md)) · [ฮาร์ดแวร์และการต่อรีเลย์](docs/hardware.md) (อังกฤษ) ·
 [Protocol](PROTOCOL.md) · [หน้าจอทั้งหมด](#หน้าจอ)
 
 ## ทำงานอย่างไร

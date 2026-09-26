@@ -5,6 +5,9 @@
 
 **English** · [ภาษาไทย](README.th.md)
 
+> **New here? Start with [docs/start-here.en.md](docs/start-here.en.md)**: a step-by-step setup guide for people new to
+> Cloudflare, Stripe and the terminal. Every step says what it does and what you should see ([ภาษาไทย](docs/start-here.md)).
+
 The screen shows one price button (default **฿20**). The customer taps it, scans the **PromptPay QR** with any Thai
 bank app and pays. The kiosk then switches a **relay** on for a fixed time (default 60 s) with a countdown, and
 goes back to the button. A canceled, failed or expired payment shows a short message instead.
@@ -20,7 +23,7 @@ QRun Lite is the small, readable edition of **QRun Pro**. See [Lite vs Pro](#lit
 
 ![QRun Lite architecture: kiosk, Cloudflare Worker and Durable Object, Stripe](docs/architecture.svg)
 
-**Docs:** [Deploy guide](docs/deploy.en.md) ([ภาษาไทย](docs/deploy.md)) · [Hardware and relay wiring](docs/hardware.md) ·
+**Docs:** [Start here (beginners)](docs/start-here.en.md) · [Deploy guide](docs/deploy.en.md) ([ภาษาไทย](docs/deploy.md)) · [Hardware and relay wiring](docs/hardware.md) ·
 [Protocol](PROTOCOL.md) · [All screens](#screens)
 
 ## How it works
