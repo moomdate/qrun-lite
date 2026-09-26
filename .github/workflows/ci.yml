@@ -51,7 +51,9 @@ jobs:
             ~/.platformio/packages
             ~/.platformio/platforms
           key: pio-${{ runner.os }}-${{ hashFiles('firmware/platformio.ini') }}
-      - run: pip install "platformio>=6.1.16,<7"
+      # Same versions as the known-good local toolchain. click >= 8.2 breaks the esptool that builds bootloader.bin
+      # ("ParamType.get_metavar() missing 1 required positional argument: ctx").
+      - run: pip install "platformio==6.2.0" "click==8.1.8"
       - name: Native logic tests
         run: pio test -e native
       - name: Build (placeholder secrets from the example)
