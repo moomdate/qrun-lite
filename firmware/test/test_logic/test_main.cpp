@@ -17,8 +17,9 @@ void test_payment_is_shown_only_when_ours() {
   TEST_ASSERT_EQUAL(SHOW_QR, onPayment(at(QR, "r1", "pi_1"), "pi_1", "r1", "QR"));   // re-sent after reconnect
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(QR, "r1", "pi_1"), "pi_2", "r2", "QR"));
   TEST_ASSERT_EQUAL(DISCARD_QR, onPayment(at(IDLE), "pi_1", "r1", "QR"));            // pending after a reboot: cancel, don't pop up
-  TEST_ASSERT_EQUAL(IGNORE, onPayment(at(RUNNING), "pi_1", "r1", "QR"));
-  TEST_ASSERT_EQUAL(IGNORE, onPayment(at(MESSAGE), "pi_1", "r1", "QR"));
+  // Never on screen, so nobody can pay it: cancel instead of leaving it payable until the Worker's TTL.
+  TEST_ASSERT_EQUAL(DISCARD_QR, onPayment(at(RUNNING), "pi_2", "r2", "QR"));   // create lost a race to a payment
+  TEST_ASSERT_EQUAL(DISCARD_QR, onPayment(at(MESSAGE), "pi_1", "r1", "QR"));   // answer after the 20 s timeout
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(CREATING, "r1"), "", "r1", "QR"));
   TEST_ASSERT_EQUAL(IGNORE, onPayment(at(CREATING, "r1"), "pi_1", "r1", ""));
 }
@@ -117,6 +118,44 @@ static void test_tap_filter() {
   TEST_ASSERT_TRUE(f.update(true, 3150, 200, 100));     // same press, now on screen
 }
 
+static void test_boot_guard_survives_millis_wrap() {
+  BootGuard g;
+  TEST_ASSERT_FALSE(g.passed(0, 1500));
+  TEST_ASSERT_FALSE(g.passed(1499, 1500));
+  TEST_ASSERT_TRUE(g.passed(1500, 1500));
+  TEST_ASSERT_TRUE(g.passed(20, 1500));   // 49.7 days later millis() wraps to 0: taps must still work
+}
+
+static void test_one_shot_timer() {
+  OneShot t;
+  TEST_ASSERT_FALSE(t.due(123));                // not started
+  t.start(1000, 300);
+  TEST_ASSERT_FALSE(t.due(1299));
+  TEST_ASSERT_TRUE(t.due(1300));
+  TEST_ASSERT_FALSE(t.due(1400));               // fires once
+  t.start(0xFFFFFF00u, 0x100);                  // ends exactly at 0 after the wrap: must still fire
+  TEST_ASSERT_FALSE(t.due(0xFFFFFFF0u));
+  TEST_ASSERT_TRUE(t.due(0));
+}
+
+static void test_reset_reason_names() {
+  // ESP-IDF esp_reset_reason_t values (main.cpp static_asserts them against the real enum).
+  TEST_ASSERT_EQUAL_STRING("POWERON", resetReasonName(1));
+  TEST_ASSERT_EQUAL_STRING("SW", resetReasonName(3));
+  TEST_ASSERT_EQUAL_STRING("PANIC", resetReasonName(4));
+  TEST_ASSERT_EQUAL_STRING("INT_WDT", resetReasonName(5));
+  TEST_ASSERT_EQUAL_STRING("TASK_WDT", resetReasonName(6));
+  TEST_ASSERT_EQUAL_STRING("BROWNOUT", resetReasonName(9));
+  TEST_ASSERT_EQUAL_STRING("UNKNOWN", resetReasonName(0));
+  TEST_ASSERT_EQUAL_STRING("UNKNOWN", resetReasonName(99));
+  TEST_ASSERT_EQUAL_STRING("UNKNOWN", resetReasonName(-1));
+  TEST_ASSERT_TRUE(resetWasFault(9));
+  TEST_ASSERT_TRUE(resetWasFault(4));
+  TEST_ASSERT_TRUE(resetWasFault(6));
+  TEST_ASSERT_FALSE(resetWasFault(1));
+  TEST_ASSERT_FALSE(resetWasFault(3));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_payment_is_shown_only_when_ours);
@@ -129,6 +168,9 @@ int main() {
   RUN_TEST(test_qr_version);
   RUN_TEST(test_tap_filter);
   RUN_TEST(test_elapsed_never_wraps);
+  RUN_TEST(test_boot_guard_survives_millis_wrap);
+  RUN_TEST(test_one_shot_timer);
+  RUN_TEST(test_reset_reason_names);
   RUN_TEST(test_config);
   return UNITY_END();
 }

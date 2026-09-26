@@ -7,6 +7,8 @@
 // The board never holds a Stripe key: it talks to your Cloudflare Worker with its own device token (secrets.h).
 // Wire format: ../../PROTOCOL.md. Frame decisions: ../include/logic.h (host-tested).
 #include <Arduino.h>
+#include <esp_core_dump.h>
+#include <esp_system.h>
 #include "config.h"
 #include "hw.h"
 #include "logic.h"
@@ -28,6 +30,10 @@
 
 using namespace lite;
 
+static_assert(ESP_RST_POWERON == 1 && ESP_RST_SW == 3 && ESP_RST_PANIC == 4 && ESP_RST_TASK_WDT == 6 &&
+                  ESP_RST_BROWNOUT == 9 && ESP_RST_CPU_LOCKUP == 15,
+              "esp_reset_reason_t changed: update lite::resetReasonName()");
+
 static constexpr const char* FW_VERSION = "lite-1.0.0";
 static constexpr uint32_t CREATE_TIMEOUT_MS = 20000;   // no answer to a create
 static constexpr uint32_t CANCEL_TIMEOUT_MS = 10000;   // no answer to a cancel: back to IDLE (the QR expires anyway)
@@ -40,6 +46,7 @@ static Screen screen = IDLE;
 static char ref[16] = "", pi[PI_MAX + 1] = "", qr[QR_MAX + 1] = "", lastRunPi[PI_MAX + 1] = "";
 static uint32_t since = 0, qrDeadline = 0, runUntil = 0, cancelAt = 0, lastDraw = 0;
 static bool wifi = false, online = false, live = true, cancelling = false, dirty = true;
+static BootGuard bootGuard;
 static Message message = MSG_ERROR;
 
 static const char* screenName(Screen s) {
@@ -67,12 +74,49 @@ static void run(const char* paidPi) {
   hw::relayOn(cfg::RUN_SECONDS * 1000);   // first: the esp_timer switches it off even if loop() hangs
   strlcpy(lastRunPi, paidPi, sizeof lastRunPi);
   runUntil = millis() + cfg::RUN_SECONDS * 1000;
-  Serial.printf("[RUN] %s: relay on for %lu s\n", paidPi, (unsigned long)cfg::RUN_SECONDS);
+  Serial.printf("[RUN] %s: relay on for %lu s (GPIO %d, active %s)\n", paidPi, (unsigned long)cfg::RUN_SECONDS,
+                cfg::RELAY_PIN, cfg::RELAY_ACTIVE_HIGH ? "high" : "low");
   hw::beepPaid();
   go(RUNNING);
 }
 
 static State state() { return State{screen, ref, pi, lastRunPi}; }
+
+// ---------------------------------------------------------------- diagnostics (serial only)
+
+// Why the board restarted. A crash also leaves a core dump in flash (the "coredump" partition): print its summary once
+// and erase it. Decode the backtrace with the ELF of the firmware that crashed:
+//   ~/.platformio/packages/toolchain-xtensa-esp-elf/bin/xtensa-esp32-elf-addr2line -pfiaC -e .pio/build/esp32dev/firmware.elf <addresses>
+static void logBoot() {
+  int reset = (int)esp_reset_reason();
+  Serial.printf("\n[BOOT] reset reason %s (%d), heap %u free, %u largest block\n", resetReasonName(reset), reset,
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap());
+  if (reset == ESP_RST_BROWNOUT || reset == ESP_RST_PWR_GLITCH)
+    Serial.println("[BOOT] the 3.3 V supply sagged: power the relay from its own supply (docs/hardware.md, 'Power')");
+  else if (resetWasFault(reset))
+    Serial.println("[BOOT] crash or watchdog reset: please report it with the serial log");
+  if (esp_core_dump_image_check() != ESP_OK) return;
+  esp_core_dump_summary_t d;
+  if (esp_core_dump_get_summary(&d) == ESP_OK) {
+    Serial.printf("[BOOT] core dump: task %.16s, PC 0x%08lx, cause %lu, vaddr 0x%08lx, elf %.8s\n", d.exc_task,
+                  (unsigned long)d.exc_pc, (unsigned long)d.ex_info.exc_cause, (unsigned long)d.ex_info.exc_vaddr,
+                  (const char*)d.app_elf_sha256);
+    Serial.print("[BOOT] backtrace");
+    for (uint32_t i = 0; i < d.exc_bt_info.depth && i < 16; i++) Serial.printf(" 0x%08lx", (unsigned long)d.exc_bt_info.bt[i]);
+    Serial.println(d.exc_bt_info.corrupted ? " (corrupted)" : "");
+  }
+  esp_core_dump_image_erase();
+}
+
+// Once a second while the relay runs: heap and loop-stack trend, to tell a leak or overflow from a power problem.
+static void logRunning(uint32_t now, uint32_t left) {
+  static uint32_t last = 0;
+  if (elapsedMs(now, last) < 1000) return;
+  last = now;
+  Serial.printf("[RUN] %lus left, heap %u free / %u largest / %u min, loop stack %u free\n", (unsigned long)left,
+                (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMaxAllocHeap(), (unsigned)ESP.getMinFreeHeap(),
+                (unsigned)uxTaskGetStackHighWaterMark(nullptr));
+}
 
 // ---------------------------------------------------------------- Worker frames
 
@@ -125,6 +169,7 @@ static void onError(const char* r, const char* msg) {
 void setup() {
   Serial.begin(115200);
   hw::begin();   // relay off before anything else can fail
+  logBoot();
   if (!ui::begin()) Serial.println("[UI] frame buffer alloc failed");
   hw::wifiBegin(WIFI_SSID, WIFI_PASS);
   net::begin({WS_HOST, WS_PORT, WS_USE_TLS, DEVICE_ID, "Authorization: Bearer " DEVICE_TOKEN, ROOT_CA_BUNDLE},
@@ -142,7 +187,7 @@ void loop() {
   uint32_t now = millis();
 
   int x, y;
-  if (hw::tapped(x, y) && now > BOOT_TAP_GUARD_MS) {
+  if (hw::tapped(x, y) && bootGuard.passed(now, BOOT_TAP_GUARD_MS)) {
     Serial.printf("[TAP] %d,%d on %s\n", x, y, screenName(screen));
     if (screen == IDLE && online && ui::hitPrice(x, y)) {
       formatRef(esp_random(), esp_random(), ref, sizeof ref);
@@ -168,6 +213,7 @@ void loop() {
       else if ((int32_t)(now - qrDeadline) > (int32_t)QR_GRACE_MS) showMessage(MSG_EXPIRED);
       break;
     case RUNNING:
+      logRunning(now, (int32_t)(runUntil - now) > 0 ? (runUntil - now) / 1000 : 0);
       if ((int32_t)(now - runUntil) >= 0) {
         hw::relayOff();
         Serial.println("[RUN] done");
@@ -183,7 +229,7 @@ void loop() {
 
   // Full redraw on every change, and once a second while a countdown is on screen.
   bool ticking = screen == QR || screen == RUNNING;
-  if (dirty || (ticking && now - lastDraw >= 1000)) {
+  if (dirty || (ticking && elapsedMs(now, lastDraw) >= 1000)) {
     uint32_t end = screen == QR ? qrDeadline : runUntil;
     uint32_t left = (int32_t)(end - now) > 0 ? (end - now + 999) / 1000 : 0;
     ui::draw({screen, wifi, online, live, cfg::PRICE_SATANG, left, qr, cancelling, message});

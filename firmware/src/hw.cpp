@@ -16,7 +16,8 @@ constexpr int PIN_LED_R = 4, PIN_LED_G = 16, PIN_LED_B = 17;   // RGB LED, activ
 TFT_Touch touch(33, 25, 32, 39);
 esp_timer_handle_t stopTimer = nullptr;
 bool prevWifi = false;
-uint32_t beepEnd = 0, lastWifiLog = 0;
+lite::OneShot beepEnd;
+uint32_t lastWifiLog = 0;
 
 void relaySet(bool on) { digitalWrite(cfg::RELAY_PIN, on == cfg::RELAY_ACTIVE_HIGH ? HIGH : LOW); }
 
@@ -25,7 +26,7 @@ void stopTimerCb(void*) { relaySet(false); }
 
 void beep(uint16_t freq, uint16_t ms) {
   ledcWriteTone(PIN_SPK, freq);
-  beepEnd = millis() + ms;
+  beepEnd.start(millis(), ms);
 }
 
 }  // namespace
@@ -60,7 +61,7 @@ void beepPaid() { beep(1568, 250); }
 void beepError() { beep(220, 300); }
 
 void pump() {
-  if (beepEnd && (int32_t)(millis() - beepEnd) >= 0) { ledcWriteTone(PIN_SPK, 0); beepEnd = 0; }
+  if (beepEnd.due(millis())) ledcWriteTone(PIN_SPK, 0);
 }
 
 bool tapped(int& x, int& y) {

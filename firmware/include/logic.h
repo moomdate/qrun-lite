@@ -43,7 +43,9 @@ inline Action onPayment(const State& s, const char* pi, const char* ref, const c
   // Still pending after a reboot: nobody is standing at the kiosk waiting for that QR any more, so don't pop it
   // up on its own — cancel it. If the customer had already paid, the cancel is refused and the Worker sends
   // "succeeded", which runs the relay as usual.
-  if (s.screen == IDLE) return DISCARD_QR;
+  // The same goes for any payment that arrives while no QR can be shown (after the create timed out, or while the
+  // relay runs because an earlier QR was paid): nobody can pay it, so don't leave it payable until the Worker's TTL.
+  if (s.screen == IDLE || s.screen == MESSAGE || s.screen == RUNNING) return DISCARD_QR;
   bool ours = (s.screen == CREATING && same(ref, s.ref)) ||
               (s.screen == QR && same(pi, s.pi));     // re-sent after a reconnect
   if (!ours) return IGNORE;
@@ -79,6 +81,39 @@ inline uint32_t elapsedMs(uint32_t now, uint32_t since) {
   int32_t d = (int32_t)(now - since);
   return d < 0 ? 0 : (uint32_t)d;
 }
+
+// Ignore taps for the first `guard` ms after boot. Sticky: once passed it stays passed, so the 49.7-day millis()
+// wrap doesn't bring back a "just booted" window (a plain `now > guard` would).
+struct BootGuard {
+  bool over = false;
+  bool passed(uint32_t now, uint32_t guard) {
+    if (!over && now >= guard) over = true;
+    return over;
+  }
+};
+
+// A timer that fires once. Wrap-safe, and has its own "running" flag, so an end time that happens to be 0 after
+// the millis() wrap is not mistaken for "not running".
+struct OneShot {
+  bool running = false;
+  uint32_t end = 0;
+  void start(uint32_t now, uint32_t ms) { running = true; end = now + ms; }
+  bool due(uint32_t now) {
+    if (!running || (int32_t)(now - end) < 0) return false;
+    running = false;
+    return true;
+  }
+};
+
+// esp_reset_reason() as text for the boot log (values of ESP-IDF's esp_reset_reason_t; main.cpp checks them).
+inline const char* resetReasonName(int r) {
+  static const char* const N[] = {"UNKNOWN", "POWERON", "EXT", "SW", "PANIC", "INT_WDT", "TASK_WDT", "WDT",
+                                  "DEEPSLEEP", "BROWNOUT", "SDIO", "USB", "JTAG", "EFUSE", "PWR_GLITCH", "CPU_LOCKUP"};
+  return r >= 0 && r < (int)(sizeof N / sizeof N[0]) ? N[r] : "UNKNOWN";
+}
+
+// A reset nobody asked for: a crash, a watchdog, or the supply voltage sagging (BROWNOUT, PWR_GLITCH).
+inline bool resetWasFault(int r) { return (r >= 4 && r <= 7) || r == 9 || r == 14 || r == 15; }
 
 // Resistive touch glitches (noise at power-up, a finger sliding) must not count as taps: a tap is a press
 // held continuously for TAP_HOLD_MS at a point on the screen, and counts once per press.
