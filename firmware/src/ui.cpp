@@ -15,7 +15,7 @@ TFT_eSprite fb(&tft);   // 8-bit 320x240 frame buffer (75 KB)
 
 // RGB565 colours (the 8-bit sprite rounds them to RGB332)
 constexpr uint16_t BG = 0x0129, CARD = 0x2A0B, TEXT = TFT_WHITE, MUTED = 0xAD7F, BLUE = 0x04BF, GREEN = 0x2EC9,
-                   RED = 0xD8A7, AMBER = 0xFDA0, GREY = 0x6B6D;
+                   RED = 0xD8A7, AMBER = 0xFDA0, GREY = 0x9CF3;
 
 struct Rect {
   int x, y, w, h;
@@ -80,7 +80,7 @@ void idle(const View& v) {
   fb.fillRoundRect(b.x, b.y, b.w, b.h, 16, fill);
   text(sarabunBold36, priceText(v.price), 160, b.y + 50, v.online ? TEXT : GREY, fill);
   text(sarabun18, v.online ? "แตะเพื่อจ่าย" : "กำลังเชื่อมต่อ...", 160, b.y + 98, v.online ? TEXT : GREY, fill);
-  char run[48];
+  char run[96];   // Thai is 3 bytes per character in UTF-8
   snprintf(run, sizeof run, "จ่ายแล้วทำงาน %lu วินาที", (unsigned long)cfg::RUN_SECONDS);
   text(sarabun18, run, 160, 200, MUTED, BG);
   text(sarabun18, "สแกนจ่ายด้วยแอปธนาคาร (PromptPay)", 160, 224, MUTED, BG);

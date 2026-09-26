@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" width="960" height="620" font-family="-apple-system, 'Segoe UI', Roboto, 'Noto Sans Thai', sans-serif" role="img" aria-labelledby="t d">
+  <title id="t">QRun Lite architecture</title>
+  <desc id="d">One kiosk keeps a WebSocket open to a Cloudflare Worker and its Durable Object. The Worker holds the Stripe key, creates a PromptPay PaymentIntent for the one fixed price, receives the signed Stripe webhook and pushes the result to the kiosk, which switches its relay on.</desc>
+  <style>
+    :root { --bg:#ffffff; --ink:#1b1f24; --muted:#57606a; --line:#8c959f; --card:#f6f8fa;
+            --cf:#f6821f; --cf-bg:#fff4ea; --st:#635bff; --st-bg:#f0efff; --dev:#1f883d; --dev-bg:#eaf6ec; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#0d1117; --ink:#e6edf3; --muted:#9198a1; --line:#6e7681; --card:#161b22;
+              --cf-bg:#2a1a0c; --st-bg:#1c1a3a; --dev:#3fb950; --dev-bg:#10261a; }
+    }
+    .bg { fill: var(--bg); }
+    .h { font-size: 17px; font-weight: 700; fill: var(--ink); }
+    .s { font-size: 13px; fill: var(--muted); }
+    .m { font-size: 11.5px; fill: var(--ink); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .lbl { font-size: 13px; fill: var(--ink); }
+    .b { font-weight: 700; }
+    .card { fill: var(--card); stroke: var(--line); stroke-width: 1; }
+    .arrow { stroke: var(--ink); stroke-width: 1.6; fill: none; marker-end: url(#a); }
+    .arrow-d { stroke: var(--muted); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; marker-end: url(#ad); }
+    .num { fill: var(--ink); }
+    .numt { font-size: 12px; font-weight: 700; fill: var(--bg); }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="960" height="620"/>
+  <text class="h" x="30" y="38" style="font-size:20px">QRun Lite — how a payment flows</text>
+  <text class="s" x="30" y="60">One kiosk, one price. The kiosk never holds a Stripe key — only its own device token.</text>
+
+  <!-- Kiosk -->
+  <rect x="30" y="100" width="210" height="290" rx="12" fill="var(--dev-bg)" stroke="var(--dev)" stroke-width="1.5"/>
+  <text class="h" x="46" y="128">Kiosk (ESP32 CYD)</text>
+  <text class="s" x="46" y="148">touch screen · speaker · relay</text>
+  <rect class="card" x="44" y="162" width="182" height="76" rx="8"/>
+  <text class="lbl" x="58" y="186">① tap the price (฿20)</text>
+  <text class="lbl" x="58" y="208">③ show QR + countdown</text>
+  <text class="s" x="58" y="228">cancel button</text>
+  <rect class="card" x="44" y="250" width="182" height="124" rx="8"/>
+  <text class="lbl" x="58" y="272">⑥ paid →</text>
+  <text class="lbl" x="58" y="292">beep, relay ON (GPIO 22)</text>
+  <text class="lbl" x="58" y="312">countdown on screen</text>
+  <text class="lbl" x="58" y="332">timer → relay OFF</text>
+  <text class="s" x="58" y="352">back to the price button</text>
+
+  <!-- Cloudflare -->
+  <rect x="340" y="100" width="290" height="290" rx="12" fill="var(--cf-bg)" stroke="var(--cf)" stroke-width="1.5"/>
+  <text class="h" x="356" y="128">Cloudflare</text>
+  <rect class="card" x="356" y="142" width="258" height="96" rx="8"/>
+  <text class="lbl b" x="370" y="164">Worker</text>
+  <text class="m" x="370" y="184">GET  /ws · DEVICE_TOKEN</text>
+  <text class="m" x="370" y="203">POST /stripe/webhook · signed</text>
+  <text class="s" x="370" y="224">accepts only PRICE_SATANG</text>
+  <rect class="card" x="356" y="250" width="258" height="124" rx="8"/>
+  <text class="lbl b" x="370" y="272">Durable Object "Terminal"</text>
+  <text class="s" x="370" y="292">holds the kiosk's WebSocket</text>
+  <text class="s" x="370" y="311">stores the one pending payment</text>
+  <text class="s" x="370" y="330">alarm at QR expiry: cancel it</text>
+  <text class="s" x="370" y="349">re-check at Stripe on hello</text>
+
+  <!-- Stripe -->
+  <rect x="720" y="100" width="210" height="290" rx="12" fill="var(--st-bg)" stroke="var(--st)" stroke-width="1.5"/>
+  <text class="h" x="736" y="128">Stripe</text>
+  <rect class="card" x="736" y="142" width="178" height="96" rx="8"/>
+  <text class="lbl b" x="748" y="164">PaymentIntent</text>
+  <text class="m" x="748" y="184">currency=thb</text>
+  <text class="m" x="748" y="203">promptpay, confirm</text>
+  <text class="s" x="748" y="224">→ QR payload (EMVCo)</text>
+  <rect class="card" x="736" y="250" width="178" height="124" rx="8"/>
+  <text class="lbl b" x="748" y="272">Webhook</text>
+  <text class="m" x="748" y="292">payment_intent.</text>
+  <text class="m" x="762" y="310">succeeded</text>
+  <text class="m" x="762" y="328">payment_failed</text>
+  <text class="m" x="762" y="346">canceled</text>
+
+  <!-- Customer -->
+  <rect x="720" y="470" width="210" height="96" rx="12" class="card"/>
+  <text class="h" x="736" y="498">Customer</text>
+  <text class="s" x="736" y="518">any Thai bank app</text>
+  <text class="s" x="736" y="537">scans &amp; pays via PromptPay</text>
+  <text class="s" x="736" y="556">(test mode: Stripe test page)</text>
+
+  <!-- Secrets -->
+  <rect x="340" y="420" width="290" height="68" rx="10" class="card"/>
+  <text class="lbl b" x="356" y="442">Worker secrets (never on the board)</text>
+  <text class="m" x="356" y="462">STRIPE_SECRET_KEY</text>
+  <text class="m" x="356" y="479">STRIPE_WEBHOOK_SECRET · DEVICE_TOKEN</text>
+
+  <!-- ① create over WS -->
+  <path class="arrow" d="M240 200 H352"/>
+  <text class="m" x="248" y="192">create</text>
+  <!-- ② worker → stripe -->
+  <path class="arrow" d="M614 180 H732"/>
+  <text class="m" x="626" y="172">POST /v1/…</text>
+  <circle class="num" cx="673" cy="196" r="10"/><text class="numt" x="673" y="200" text-anchor="middle">2</text>
+  <!-- ③ QR back -->
+  <path class="arrow" d="M732 215 H614"/>
+  <path class="arrow" d="M352 226 H244"/>
+  <text class="m" x="248" y="244">payment{qr}</text>
+  <!-- WebSocket label -->
+  <text class="s b" x="248" y="266" style="fill:var(--dev)">WebSocket</text>
+  <text class="s" x="248" y="282" style="fill:var(--dev)">(wss, TLS)</text>
+  <!-- ④ scan -->
+  <path class="arrow-d" d="M140 390 V590 H825 V570"/>
+  <circle class="num" cx="420" cy="590" r="10"/><text class="numt" x="420" y="594" text-anchor="middle">4</text>
+  <text class="s" x="436" y="584">customer scans the QR on the screen</text>
+  <path class="arrow" d="M825 470 V380"/>
+  <text class="m" x="834" y="432">pays</text>
+  <!-- ⑤ webhook -->
+  <path class="arrow" d="M736 300 H618"/>
+  <circle class="num" cx="677" cy="316" r="10"/><text class="numt" x="677" y="320" text-anchor="middle">5</text>
+  <!-- ⑥ status push -->
+  <path class="arrow" d="M356 318 H244"/>
+  <text class="m" x="248" y="310">status</text>
+  <text class="m" x="248" y="336">succeeded</text>
+
+  <text class="s" x="30" y="614">No polling: the webhook pushes the result. A lost webhook is caught when the QR expires or the kiosk reconnects.</text>
+</svg>

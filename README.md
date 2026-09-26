@@ -11,6 +11,18 @@ goes back to the button. A canceled, failed or expired payment shows a short mes
 
 QRun Lite is the small, readable edition of **QRun Pro**. See [Lite vs Pro](#lite-vs-pro).
 
+<p align="center">
+  <img src="docs/screens/idle.png" width="200" alt="Price button">
+  <img src="docs/screens/qr.png" width="200" alt="PromptPay QR with countdown">
+  <img src="docs/screens/running.png" width="200" alt="Paid: relay running">
+  <img src="docs/screens/canceled.png" width="200" alt="Canceled">
+</p>
+
+![QRun Lite architecture: kiosk, Cloudflare Worker and Durable Object, Stripe](docs/architecture.svg)
+
+**Docs:** [Deploy guide](docs/deploy.en.md) ([ภาษาไทย](docs/deploy.md)) · [Hardware and relay wiring](docs/hardware.md) ·
+[Protocol](PROTOCOL.md) · [All screens](#screens)
+
 ## How it works
 
 ```mermaid
@@ -41,6 +53,18 @@ sequenceDiagram
 
 Wire format: [PROTOCOL.md](PROTOCOL.md).
 
+## Screens
+
+Captured from a real board (320×240). The QR in these pictures is fake preview data.
+
+| | | |
+|---|---|---|
+| ![](docs/screens/idle.png)<br>Ready: tap the price | ![](docs/screens/idle_test.png)<br>Ready, Stripe test key (**TEST**) | ![](docs/screens/idle_connecting.png)<br>WiFi up, connecting to the Worker |
+| ![](docs/screens/idle_offline.png)<br>No WiFi | ![](docs/screens/creating.png)<br>Creating the QR | ![](docs/screens/qr.png)<br>QR + countdown + cancel |
+| ![](docs/screens/qr_urgent.png)<br>Last 30 s: amber countdown | ![](docs/screens/qr_cancelling.png)<br>Cancel sent | ![](docs/screens/qr_offline.png)<br>Offline while the QR is shown |
+| ![](docs/screens/running.png)<br>Paid: relay on, countdown | ![](docs/screens/canceled.png)<br>Canceled | ![](docs/screens/expired.png)<br>QR expired |
+| ![](docs/screens/failed.png)<br>Payment failed | ![](docs/screens/error.png)<br>Error (any cause) | ![](docs/screens/qr_test.png)<br>QR in test mode |
+
 | Folder | What |
 |---|---|
 | [`worker/`](worker/) | Cloudflare Worker + Durable Object (TypeScript, no runtime dependencies) |
@@ -53,7 +77,12 @@ Wire format: [PROTOCOL.md](PROTOCOL.md).
   separately. Pin and polarity: [`firmware/include/config.h`](firmware/include/config.h).
 - A 2.4 GHz WiFi network.
 
+Wiring diagram, pins and board variants: [docs/hardware.md](docs/hardware.md).
+
 ## Setup (about 10 minutes)
+
+The short version is below. The [step-by-step deploy guide](docs/deploy.en.md) ([ภาษาไทย](docs/deploy.md)) adds
+what to expect on the serial log and in `wrangler tail`, going live, maintenance and costs.
 
 You need: a **Stripe account registered in Thailand**, a free **Cloudflare** account, **Node.js 20+** and
 **PlatformIO** (VS Code extension or `pip install platformio`).
@@ -169,7 +198,7 @@ features are **not in the Lite code** (they were removed, not switched off):
 | Sound | one paid beep, one error beep | chimes, last-seconds countdown ticks, "done" chime |
 | Tooling | – | `KIOSK_DEBUG` preview and screenshot tool; scripts to import and deploy secrets, point the firmware, run `stripe listen`, switch to test mode |
 | Tests | unit, 7 e2e scenarios, native logic tests | + attack e2e suite, firmware ⇄ Worker contract tests, Durable Object eviction tests, kiosk state-machine tests |
-| Docs | this README, [PROTOCOL.md](PROTOCOL.md) | + architecture diagrams, Thai deploy guide, full security model |
+| Docs | this README, [PROTOCOL.md](PROTOCOL.md), [architecture diagram](docs/architecture.svg), deploy guide ([EN](docs/deploy.en.md) / [TH](docs/deploy.md)), [hardware notes](docs/hardware.md) | + architecture write-up for multi-kiosk setups, full security model |
 
 ## Get QRun Pro
 

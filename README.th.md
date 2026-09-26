@@ -11,6 +11,18 @@
 
 QRun Lite คือรุ่นเล็กที่อ่านโค้ดง่ายของ **QRun Pro** ดู [Lite กับ Pro ต่างกันอย่างไร](#lite-กับ-pro-ต่างกันอย่างไร)
 
+<p align="center">
+  <img src="docs/screens/idle.png" width="200" alt="ปุ่มราคา">
+  <img src="docs/screens/qr.png" width="200" alt="QR พร้อมเพย์และนับถอยหลัง">
+  <img src="docs/screens/running.png" width="200" alt="จ่ายแล้ว รีเลย์ทำงาน">
+  <img src="docs/screens/canceled.png" width="200" alt="ยกเลิกแล้ว">
+</p>
+
+![แผนภาพ QRun Lite: ตู้, Cloudflare Worker และ Durable Object, Stripe](docs/architecture.svg)
+
+**เอกสาร:** [คู่มือ Deploy](docs/deploy.md) ([English](docs/deploy.en.md)) · [ฮาร์ดแวร์และการต่อรีเลย์](docs/hardware.md) (อังกฤษ) ·
+[Protocol](PROTOCOL.md) · [หน้าจอทั้งหมด](#หน้าจอ)
+
 ## ทำงานอย่างไร
 
 ```mermaid
@@ -39,6 +51,18 @@ sequenceDiagram
 
 รูปแบบข้อความ: [PROTOCOL.md](PROTOCOL.md)
 
+## หน้าจอ
+
+จับภาพจากบอร์ดจริง (320×240) QR ในภาพเป็นข้อมูลตัวอย่าง จ่ายไม่ได้
+
+| | | |
+|---|---|---|
+| ![](docs/screens/idle.png)<br>พร้อมใช้: แตะปุ่มราคา | ![](docs/screens/idle_test.png)<br>พร้อมใช้ ใช้คีย์ทดสอบ (**TEST**) | ![](docs/screens/idle_connecting.png)<br>ต่อ WiFi แล้ว กำลังต่อ Worker |
+| ![](docs/screens/idle_offline.png)<br>ไม่มี WiFi | ![](docs/screens/creating.png)<br>กำลังสร้าง QR | ![](docs/screens/qr.png)<br>QR + นับถอยหลัง + ปุ่มยกเลิก |
+| ![](docs/screens/qr_urgent.png)<br>30 วินาทีสุดท้าย: ตัวเลขสีเหลือง | ![](docs/screens/qr_cancelling.png)<br>ส่งคำขอยกเลิกแล้ว | ![](docs/screens/qr_offline.png)<br>หลุดเน็ตระหว่างแสดง QR |
+| ![](docs/screens/running.png)<br>จ่ายแล้ว: รีเลย์ทำงาน นับถอยหลัง | ![](docs/screens/canceled.png)<br>ยกเลิกแล้ว | ![](docs/screens/expired.png)<br>QR หมดอายุ |
+| ![](docs/screens/failed.png)<br>จ่ายไม่สำเร็จ | ![](docs/screens/error.png)<br>ข้อผิดพลาด (ทุกสาเหตุ) | ![](docs/screens/qr_test.png)<br>QR โหมดทดสอบ |
+
 | โฟลเดอร์ | คืออะไร |
 |---|---|
 | [`worker/`](worker/) | Cloudflare Worker + Durable Object (TypeScript ไม่มี runtime dependency) |
@@ -51,7 +75,12 @@ sequenceDiagram
   ตั้งขาและขั้วได้ที่ [`firmware/include/config.h`](firmware/include/config.h)
 - WiFi 2.4 GHz
 
+แผนผังการต่อสาย ขาที่ใช้ และรุ่นของบอร์ด: [docs/hardware.md](docs/hardware.md)
+
 ## ติดตั้ง (ประมาณ 10 นาที)
+
+ด้านล่างเป็นฉบับย่อ [คู่มือ Deploy ทีละขั้น](docs/deploy.md) มีรายละเอียดเพิ่ม: สิ่งที่ต้องเห็นใน serial และ `wrangler tail`,
+การเปิดใช้เงินจริง, งานดูแลประจำ และค่าใช้จ่าย
 
 ต้องมี: **บัญชี Stripe ที่จดในประเทศไทย**, บัญชี **Cloudflare** แบบฟรี, **Node.js 20 ขึ้นไป** และ **PlatformIO**
 (ส่วนเสริม VS Code หรือ `pip install platformio`)
@@ -166,7 +195,7 @@ QRun Lite ใช้งานได้ครบสำหรับตู้เด�
 | เสียง | บี๊บตอนจ่ายสำเร็จ และบี๊บตอนผิดพลาด | เสียงเพลง, เสียงนับถอยหลังวินาทีสุดท้าย, เสียงจบงาน |
 | เครื่องมือ | – | โหมด `KIOSK_DEBUG` สำหรับพรีวิวและจับภาพหน้าจอ, สคริปต์นำเข้าและ deploy secret, ชี้เฟิร์มแวร์, รัน `stripe listen`, สลับโหมดทดสอบ |
 | การทดสอบ | unit, e2e 7 กรณี, ทดสอบลอจิกบนคอมพิวเตอร์ | + ชุด e2e จำลองการโจมตี, contract test ระหว่างเฟิร์มแวร์กับ Worker, ทดสอบ Durable Object ถูก evict, ทดสอบ state machine ของตู้ |
-| เอกสาร | README นี้, [PROTOCOL.md](PROTOCOL.md) | + แผนภาพสถาปัตยกรรม, คู่มือ deploy ภาษาไทย, โมเดลความปลอดภัยฉบับเต็ม |
+| เอกสาร | README นี้, [PROTOCOL.md](PROTOCOL.md), [แผนภาพ](docs/architecture.svg), คู่มือ deploy ([TH](docs/deploy.md) / [EN](docs/deploy.en.md)), [ฮาร์ดแวร์](docs/hardware.md) | + เอกสารสถาปัตยกรรมสำหรับหลายตู้, โมเดลความปลอดภัยฉบับเต็ม |
 
 ## รับ QRun Pro
 
