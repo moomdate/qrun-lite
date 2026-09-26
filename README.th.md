@@ -15,6 +15,17 @@
 QRun Lite คือรุ่นเล็กที่อ่านโค้ดง่ายของ **QRun Pro** ดู [Lite กับ Pro ต่างกันอย่างไร](#lite-กับ-pro-ต่างกันอย่างไร)
 
 <p align="center">
+  <img src="docs/media/demo-flow.gif" width="320" alt="ตู้จริง: เปิดเครื่อง แตะ ฿10 ขึ้น QR แล้วกดยกเลิก">
+</p>
+<p align="center">
+  <img src="docs/media/photo-idle.jpg" width="260" alt="บอร์ดจริง: ปุ่มราคา">
+  <img src="docs/media/photo-qr.jpg" width="260" alt="บอร์ดจริง: QR พร้อมเพย์ (เบลอไว้) และนับถอยหลัง">
+  <img src="docs/media/photo-running.jpg" width="260" alt="บอร์ดจริง: จ่ายแล้ว รีเลย์ทำงาน">
+</p>
+<p align="center"><sub>ภาพจากบอร์ด CYD จริง (เบลอ QR ไว้) วิดีโอ: <a href="docs/media/demo-flow.mp4">แตะ → QR → ยกเลิก (11 วิ)</a> ·
+<a href="docs/media/demo-running.mp4">นับถอยหลังตอนทำงาน (3 วิ)</a> ภาพหน้าจอทุกสถานะ: <a href="#หน้าจอ">หน้าจอ</a></sub></p>
+
+<p align="center">
   <img src="docs/screens/idle.png" width="200" alt="ปุ่มราคา">
   <img src="docs/screens/qr.png" width="200" alt="QR พร้อมเพย์และนับถอยหลัง">
   <img src="docs/screens/running.png" width="200" alt="จ่ายแล้ว รีเลย์ทำงาน">
@@ -218,7 +229,7 @@ QRun Lite ใช้งานได้ครบสำหรับตู้เด�
 ## รับ QRun Pro
 
 ต้องการหลายราคา หลายตู้ หรือตู้ที่กู้คืนตัวเองได้ทุกครั้งที่เน็ตสะดุด? ติดต่อผู้พัฒนา (moomdate) ได้ที่:
-_[ใส่ช่องทางติดต่อที่นี่]_
+เปิด issue หรือติดต่อ [@moomdate](https://github.com/moomdate) บน GitHub
 
 ## สัญญาอนุญาต
 

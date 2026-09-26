@@ -8,7 +8,6 @@ Please **don't open a public issue** for a security problem.
 
 - Preferred: GitHub → this repository → **Security** → **Report a vulnerability** (a private GitHub Security
   Advisory, visible only to the maintainer).
-- Or email: _[security contact email: add before publishing]_
 
 Include what you found, how to reproduce it, and the impact you expect. You'll get an answer within a week. Fixes
 land on `main` and the advisory is published once a fix exists. Only the latest `main` is supported.

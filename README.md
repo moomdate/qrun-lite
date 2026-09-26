@@ -15,6 +15,17 @@ goes back to the button. A canceled, failed or expired payment shows a short mes
 QRun Lite is the small, readable edition of **QRun Pro**. See [Lite vs Pro](#lite-vs-pro).
 
 <p align="center">
+  <img src="docs/media/demo-flow.gif" width="320" alt="Real kiosk: boot, tap ฿10, QR, cancel">
+</p>
+<p align="center">
+  <img src="docs/media/photo-idle.jpg" width="260" alt="Real board: price button">
+  <img src="docs/media/photo-qr.jpg" width="260" alt="Real board: PromptPay QR (blurred) with countdown">
+  <img src="docs/media/photo-running.jpg" width="260" alt="Real board: paid, relay running">
+</p>
+<p align="center"><sub>Photos of a real CYD board (QR blurred). Videos: <a href="docs/media/demo-flow.mp4">tap → QR → cancel (11 s)</a> ·
+<a href="docs/media/demo-running.mp4">running countdown (3 s)</a>. Screen captures of every state: <a href="#screens">Screens</a>.</sub></p>
+
+<p align="center">
   <img src="docs/screens/idle.png" width="200" alt="Price button">
   <img src="docs/screens/qr.png" width="200" alt="PromptPay QR with countdown">
   <img src="docs/screens/running.png" width="200" alt="Paid: relay running">
@@ -221,7 +232,7 @@ features are **not in the Lite code** (they were removed, not switched off):
 ## Get QRun Pro
 
 Need several prices, several kiosks, or a kiosk that recovers from every network glitch on its own? QRun Pro is
-available from the author, moomdate. Contact: _[add contact details here]_.
+available from the author, moomdate. Contact: open an issue or message [@moomdate](https://github.com/moomdate) on GitHub.
 
 ## License
 

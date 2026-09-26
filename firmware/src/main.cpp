@@ -97,7 +97,11 @@ static void logBoot() {
     Serial.println("[BOOT] crash or watchdog reset: please report it with the serial log");
   if (esp_core_dump_image_check() != ESP_OK) return;
   esp_core_dump_summary_t d;
-  if (esp_core_dump_get_summary(&d) == ESP_OK) {
+  // A partial or stale dump (erased flash reads 0xa5/0xff, task name not text) is reported as such, not as garbage.
+  bool sane = esp_core_dump_get_summary(&d) == ESP_OK && d.exc_pc >= 0x40000000 && d.exc_pc < 0x42000000;
+  for (int i = 0; sane && i < (int)sizeof d.exc_task && d.exc_task[i]; i++) sane = d.exc_task[i] >= 0x20 && d.exc_task[i] < 0x7f;
+  if (!sane) Serial.println("[BOOT] an unreadable core dump was left in flash (older firmware or interrupted write): erased");
+  if (sane) {
     Serial.printf("[BOOT] core dump: task %.16s, PC 0x%08lx, cause %lu, vaddr 0x%08lx, elf %.8s\n", d.exc_task,
                   (unsigned long)d.exc_pc, (unsigned long)d.ex_info.exc_cause, (unsigned long)d.ex_info.exc_vaddr,
                   (const char*)d.app_elf_sha256);
