@@ -1,0 +1,107 @@
+// Pure kiosk logic: what to do with each Worker frame, plus small formatting helpers.
+// No Arduino here, so it is unit-tested on the host: `pio test -e native`.
+#pragma once
+#include <stddef.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+
+namespace lite {
+
+enum Screen : uint8_t { IDLE, CREATING, QR, RUNNING, MESSAGE };
+enum Message : uint8_t { MSG_CANCELED, MSG_EXPIRED, MSG_FAILED, MSG_ERROR };
+
+// Longest payment id / QR payload the kiosk keeps. A longer QR can't be drawn (see qrVersionFor).
+static constexpr size_t PI_MAX = 63;
+static constexpr size_t QR_MAX = 520;
+
+inline bool empty(const char* s) { return !s || !*s; }
+inline bool same(const char* a, const char* b) { return !empty(a) && !empty(b) && strcmp(a, b) == 0; }
+
+// What the kiosk is doing, as far as frame decisions care.
+struct State {
+  Screen screen;
+  const char* ref;        // ref of our create (CREATING / QR)
+  const char* pi;         // payment shown (QR)
+  const char* lastRunPi;  // last payment the relay ran for
+};
+
+enum Action : uint8_t {
+  IGNORE,
+  SHOW_QR,        // show this payment's QR
+  REJECT_QR,      // ours, but too big to keep: cancel it and show an error
+  RUN,            // paid: switch the relay on
+  SHOW_RESULT,    // canceled / expired / failed: show the message
+  SHOW_ERROR,     // our create failed
+  CANCEL_FAILED,  // our cancel failed: let the customer press it again
+};
+
+// {"t":"payment", pi, ref, qr}
+inline Action onPayment(const State& s, const char* pi, const char* ref, const char* qr) {
+  if (empty(pi) || empty(qr)) return IGNORE;
+  bool ours = (s.screen == CREATING && same(ref, s.ref)) ||
+              (s.screen == QR && same(pi, s.pi)) ||   // re-sent after a reconnect
+              s.screen == IDLE;                       // still pending after a reboot
+  if (!ours) return IGNORE;
+  return strlen(pi) <= PI_MAX && strlen(qr) <= QR_MAX ? SHOW_QR : REJECT_QR;
+}
+
+// {"t":"status", pi, status}
+inline Action onStatus(const State& s, const char* pi, const char* status) {
+  if (empty(pi) || strlen(pi) > PI_MAX) return IGNORE;
+  if (s.screen == RUNNING) return IGNORE;                        // never restart or extend a run
+  if (same(status, "succeeded")) return same(pi, s.lastRunPi) ? IGNORE : RUN;   // paid is paid, whatever is on screen
+  if (same(pi, s.pi) && s.screen == QR) return SHOW_RESULT;
+  return IGNORE;
+}
+
+// {"t":"error", ref?, msg}
+inline Action onError(const State& s, const char* ref) {
+  if (s.screen == CREATING && (empty(ref) || same(ref, s.ref))) return SHOW_ERROR;
+  if (s.screen == QR && same(ref, s.ref)) return CANCEL_FAILED;
+  return IGNORE;
+}
+
+inline Message messageFor(const char* status) {
+  if (same(status, "canceled")) return MSG_CANCELED;
+  if (same(status, "expired")) return MSG_EXPIRED;
+  if (same(status, "failed")) return MSG_FAILED;
+  return MSG_ERROR;
+}
+
+// Seconds a QR has left: from the Worker's `expires` (unix s) when the clock is NTP-synced, else `fallback`.
+inline uint32_t secondsLeft(int64_t expires, int64_t now, uint32_t fallback) {
+  if (now < 1700000000 || expires <= 0) return fallback;
+  int64_t r = expires - now;
+  return r < 0 ? 0 : r > 3600 ? 3600 : (uint32_t)r;
+}
+
+// ricmoo/QRCode silently corrupts data that overflows a version: pick it from the byte-mode ECC_LOW
+// capacity table, v3..v15. 0 = too long.
+inline uint8_t qrVersionFor(size_t len) {
+  static const uint16_t cap[] = {0, 17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321, 367, 425, 458, 520};
+  uint8_t v = 3;
+  while (v < 15 && cap[v] < len) v++;
+  return cap[v] >= len ? v : 0;
+}
+
+// 2000 -> "20", 2050 -> "20.50"
+inline char* formatBaht(uint32_t satang, char* out, size_t n) {
+  if (satang % 100) snprintf(out, n, "%lu.%02lu", (unsigned long)(satang / 100), (unsigned long)(satang % 100));
+  else snprintf(out, n, "%lu", (unsigned long)(satang / 100));
+  return out;
+}
+
+// 65 -> "1:05"
+inline char* formatClock(uint32_t sec, char* out, size_t n) {
+  snprintf(out, n, "%lu:%02lu", (unsigned long)(sec / 60), (unsigned long)(sec % 60));
+  return out;
+}
+
+// create ref: 12 lowercase hex chars from two random words (the Worker accepts 1..40 printable ASCII).
+inline char* formatRef(uint32_t a, uint32_t b, char* out, size_t n) {
+  snprintf(out, n, "%08lx%04lx", (unsigned long)a, (unsigned long)(b & 0xFFFF));
+  return out;
+}
+
+}  // namespace lite

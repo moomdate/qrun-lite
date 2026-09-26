@@ -1,0 +1,4 @@
+# Local `npx wrangler dev` only. Copy to .dev.vars (git-ignored) and fill in. Use TEST keys here.
+STRIPE_SECRET_KEY=sk_test_xxx
+STRIPE_WEBHOOK_SECRET=whsec_xxx
+DEVICE_TOKEN=replace-with-openssl-rand-hex-24

@@ -1,0 +1,17 @@
+# secrets: never commit
+secrets.h
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+*.token
+.env
+.env.*
+
+# build outputs / dependencies
+node_modules/
+.wrangler/
+dist/
+.pio/
+.vscode/
+*.log
+.DS_Store

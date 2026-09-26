@@ -1,0 +1,24 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "qrun-lite",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "TERMINAL", "class_name": "Terminal" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Terminal"] }],
+  "vars": {
+    // The ONE price the kiosk may charge, in satang (2000 = ฿20). Minimum 1000 (฿10).
+    // Must equal PRICE_SATANG in ../firmware/include/config.h, or every tap ends in an error.
+    "PRICE_SATANG": "2000",
+    // How long a QR can be paid, in seconds. After that the Worker cancels it at Stripe.
+    "PAYMENT_TTL_SEC": "120",
+    // Stripe needs an email on every PromptPay payment. Put your own address here.
+    "RECEIPT_EMAIL": "receipts@example.com"
+  }
+  // Secrets (never in this file): npx wrangler secret put <NAME>
+  //   STRIPE_SECRET_KEY      sk_test_… / sk_live_… (or a restricted rk_ key with PaymentIntents: Write)
+  //   STRIPE_WEBHOOK_SECRET  whsec_… of your webhook endpoint
+  //   DEVICE_TOKEN           openssl rand -hex 24 (same value in ../firmware/include/secrets.h)
+}
