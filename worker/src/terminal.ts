@@ -7,9 +7,9 @@
 //
 // A final status is pushed to the socket and then forgotten. If the kiosk was offline, it is kept and sent on the
 // next `hello`. Best effort: a status sent into a half-open socket is lost (QRun Pro adds replay/recovery for that).
-import { cancelIntent, createPromptPay, deviceError, getIntent, isLiveKey, type StripeCfg, type StripeResult } from "./stripe";
+import { cancelIntent, createPromptPay, deviceError, getIntent, isLiveKey, keyProblem, type StripeCfg, type StripeResult } from "./stripe";
 import type { PaymentEvent } from "./stripe";
-import { log, parsePrice, validRef } from "./util";
+import { log, parsePrice, secret, validRef } from "./util";
 
 export interface Env {
   TERMINAL: DurableObjectNamespace;
@@ -67,7 +67,7 @@ export class Terminal {
   }
 
   async webSocketMessage(ws: WebSocket, msg: string | ArrayBuffer): Promise<void> {
-    if ((typeof msg === "string" ? msg.length : msg.byteLength) > FRAME_MAX) return;
+    if (frameBytes(msg) > FRAME_MAX) return;
     let m: { t?: unknown; amount?: unknown; ref?: unknown; pi?: unknown };
     try {
       m = JSON.parse(typeof msg === "string" ? msg : new TextDecoder().decode(msg));
@@ -99,7 +99,7 @@ export class Terminal {
 
   private async onHello(ws: WebSocket): Promise<void> {
     const device = (await this.ctx.storage.get<string>("device")) ?? "kiosk";
-    send(ws, { t: "hello", device, live: isLiveKey(this.env.STRIPE_SECRET_KEY ?? "") });
+    send(ws, { t: "hello", device, live: isLiveKey(this.stripe.key) });
     const p = await this.load();
     if (!p) return;
     if (p.status !== "pending") {
@@ -125,6 +125,11 @@ export class Terminal {
     if (amount !== price) {
       log(`create ${ref}: amount ${String(amount).slice(0, 20)} != PRICE_SATANG ${price}, rejected`);
       return void send(ws, { t: "error", ref, msg: "amount not allowed" });
+    }
+    const keyError = keyProblem(this.stripe.key);
+    if (keyError) {
+      log(`create ${ref}: ${keyError}; refused without calling Stripe`); // e.g. "You did not provide an API key"
+      return void send(ws, { t: "error", ref, msg: "server misconfigured" });
     }
 
     const old = await this.load();
@@ -184,7 +189,7 @@ export class Terminal {
     if (p.expires * 1000 > Date.now() + 1000) return this.ctx.storage.setAlarm(p.expires * 1000);
     const st = await this.cancelOrCheck(p, "expired");
     if (!st) {
-      log(`expire ${p.pi}: Stripe unreachable, retry in 30 s`);
+      log(`expire ${p.pi}: Stripe call failed, retry in 30 s`);
       return this.ctx.storage.setAlarm(Date.now() + 30_000);
     }
     await this.finalize(p, st);
@@ -230,7 +235,7 @@ export class Terminal {
   }
 
   private get stripe(): StripeCfg {
-    return { key: this.env.STRIPE_SECRET_KEY ?? "", base: this.env.STRIPE_API_BASE };
+    return { key: secret(this.env.STRIPE_SECRET_KEY), base: this.env.STRIPE_API_BASE };
   }
 
   private get ttl(): number {
@@ -256,6 +261,12 @@ function finalOf(g: Extract<StripeResult, { ok: true }>, p: Payment): Final | nu
 const nowSec = () => Math.floor(Date.now() / 1000);
 const paymentMsg = (p: Payment) => ({ t: "payment", pi: p.pi, ref: p.ref, amount: p.amount, qr: p.qr, expires: p.expires });
 const statusMsg = (p: Payment) => ({ t: "status", pi: p.pi, status: p.status, amount: p.amount, ref: p.ref });
+
+/** Frame size in bytes (a JS string length counts UTF-16 units: Thai text is 3 bytes per character). */
+function frameBytes(msg: string | ArrayBuffer): number {
+  if (typeof msg !== "string") return msg.byteLength;
+  return msg.length > FRAME_MAX ? msg.length : new TextEncoder().encode(msg).byteLength;
+}
 
 function send(ws: WebSocket, msg: object): boolean {
   if (ws.readyState !== OPEN) return false;

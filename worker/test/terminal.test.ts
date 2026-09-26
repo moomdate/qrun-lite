@@ -259,3 +259,63 @@ describe("frames", () => {
     expect(ws.take()).toEqual([{ t: "pong" }]);
   });
 });
+
+describe("Stripe key misconfiguration (fail closed, never call Stripe with a bad key)", () => {
+  const logs = () => vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+  it.each([
+    ["not set", undefined, "STRIPE_SECRET_KEY secret is not set"],
+    ["empty", "", "STRIPE_SECRET_KEY secret is not set"],
+    ["blank", "   \n", "STRIPE_SECRET_KEY secret is not set"],
+    ["a publishable key", "pk_test_abc123", "STRIPE_SECRET_KEY is not a Stripe secret key"],
+    ["a webhook secret", "whsec_abc123", "STRIPE_SECRET_KEY is not a Stripe secret key"],
+    ["in quotes", '"sk_test_abc123"', "STRIPE_SECRET_KEY is not a Stripe secret key"],
+  ])("create, STRIPE_SECRET_KEY %s: generic device error, clear log, no Stripe call", async (_what, key, line) => {
+    const spy = logs();
+    const s = setup({ STRIPE_SECRET_KEY: key });
+    const ws = s.connect();
+    await s.say(ws, { t: "create", amount: 2000, ref: "r1" });
+    expect(ws.take()).toEqual([{ t: "error", ref: "r1", msg: "server misconfigured" }]);
+    expect(s.stripe.calls).toHaveLength(0);
+    const out = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(out).toContain(line);
+    expect(out).not.toContain("abc123"); // the (wrong) value itself is never logged
+  });
+
+  it("hello with a pending payment and a missing key: re-sends the QR, no Stripe call", async () => {
+    logs();
+    const s = setup();
+    const { p } = await paying(s);
+    delete s.env.STRIPE_SECRET_KEY; // secret deleted after the QR was made
+    const before = s.stripe.calls.length;
+    const ws2 = s.connect();
+    await s.say(ws2, { t: "hello" });
+    expect(ws2.take()).toEqual([{ t: "hello", device: "kiosk", live: false }, { t: "payment", ...p }]);
+    expect(s.stripe.calls.length).toBe(before);
+  });
+
+  it("trims whitespace a paste may leave around the key", async () => {
+    const s = setup({ STRIPE_SECRET_KEY: "  sk_test_unit\n" });
+    const ws = s.connect();
+    await s.say(ws, { t: "create", amount: 2000, ref: "r1" });
+    expect(ws.take()[0]).toMatchObject({ t: "payment" });
+    expect(s.stripe.calls[0]!.headers.Authorization).toBe("Bearer sk_test_unit");
+  });
+
+  it("a live key with whitespace is still reported as live", async () => {
+    const s = setup({ STRIPE_SECRET_KEY: "rk_live_x\n" });
+    const ws = s.connect();
+    await s.say(ws, { t: "hello" });
+    expect(ws.take()[0]).toEqual({ t: "hello", device: "kiosk", live: true });
+  });
+});
+
+describe("frame limit", () => {
+  it("counts bytes, not UTF-16 units: 2000 Thai characters (6000 bytes) are ignored", async () => {
+    const s = setup();
+    const ws = s.connect();
+    await s.say(ws, JSON.stringify({ t: "create", amount: 2000, ref: "r", pad: "ก".repeat(2000) }));
+    expect(ws.take()).toEqual([]);
+    expect(s.stripe.calls).toHaveLength(0);
+  });
+});

@@ -50,6 +50,22 @@ describe("device token", () => {
     expect(await r.text()).toBe("server misconfigured");
   });
 
+  it("500 (fail closed) for a weak DEVICE_TOKEN shorter than 16 characters, even when presented correctly", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const { env, hits } = envWithDo({ DEVICE_TOKEN: "1234" });
+    const r = await call(ws({ Authorization: "Bearer 1234" }), env);
+    expect(r.status).toBe(500);
+    expect(hits).toHaveLength(0);
+    expect(String(spy.mock.calls.at(-1)?.[0])).toContain("DEVICE_TOKEN is too short");
+    spy.mockRestore();
+  });
+
+  it("accepts a DEVICE_TOKEN secret stored with a trailing newline (piped paste)", async () => {
+    const { env, hits } = envWithDo({ DEVICE_TOKEN: `${TOKEN}\n` });
+    await call(ws({ Authorization: `Bearer ${TOKEN}` }), env);
+    expect(hits).toHaveLength(1);
+  });
+
   it("426 without an upgrade header; forwards a valid upgrade with a sanitized device id", async () => {
     const { env, hits } = envWithDo();
     const auth = { Authorization: `Bearer ${TOKEN}` };
@@ -87,6 +103,34 @@ describe("webhook", () => {
     const sig = which === "WRONG" ? await signed(body, "whsec_other") : undefined;
     expect((await call(post(body, sig), env)).status).toBe(400);
     expect(hits).toHaveLength(0);
+  });
+
+  it("accepts a webhook secret stored with surrounding whitespace", async () => {
+    const { env, hits } = envWithDo({ STRIPE_WEBHOOK_SECRET: " whsec_unit\n" });
+    expect((await call(post(body, await signed(body)), env)).status).toBe(200);
+    expect(hits).toHaveLength(1);
+  });
+
+  it("400 for a correctly signed but stale (replayed > 300 s later) event", async () => {
+    const { env, hits } = envWithDo();
+    const t = Math.floor(Date.now() / 1000) - 301;
+    const sig = `t=${t},v1=${await hmacSha256Hex("whsec_unit", `${t}.${body}`)}`;
+    expect((await call(post(body, sig), env)).status).toBe(400);
+    expect(hits).toHaveLength(0);
+  });
+
+  it("does not leak internals: a Durable Object failure is a plain 500 'retry'", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const { env } = envWithDo();
+    (env.TERMINAL.get as unknown as () => { fetch: () => Promise<Response> }) = () => ({
+      fetch: async () => {
+        throw new Error("internal detail sk_live_SECRET123");
+      },
+    });
+    const r = await call(post(body, await signed(body)), env);
+    expect([r.status, await r.text()]).toEqual([500, "retry"]);
+    expect(spy.mock.calls.map((c) => String(c[0])).join()).not.toContain("SECRET123");
+    spy.mockRestore();
   });
 
   it("answers 200 'ignored' for authentic events that are not ours", async () => {

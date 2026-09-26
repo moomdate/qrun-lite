@@ -125,7 +125,8 @@ export function env(over: Partial<Env> = {}): Env {
 export function setup(over: Partial<Env> = {}) {
   const stripe = fakeStripe();
   const { ctx, data, state } = fakeCtx();
-  const t = new Terminal(ctx, env(over));
+  const e = env(over);
+  const t = new Terminal(ctx, e);
   const connect = () => {
     const ws = new FakeWs();
     state.sockets.push(ws);
@@ -133,5 +134,5 @@ export function setup(over: Partial<Env> = {}) {
   };
   const say = (ws: FakeWs, msg: unknown) => t.webSocketMessage(ws as unknown as WebSocket, typeof msg === "string" ? msg : JSON.stringify(msg));
   const event = (e: object) => t.fetch(new Request("https://do/event", { method: "POST", body: JSON.stringify(e) }));
-  return { t, stripe, data, state, connect, say, event };
+  return { t, env: e, stripe, data, state, connect, say, event };
 }

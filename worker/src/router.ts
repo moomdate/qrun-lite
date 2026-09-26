@@ -4,7 +4,7 @@
 //   POST /stripe/webhook  signed Stripe events
 import { isLiveKey, parseEvent, verifySignature } from "./stripe";
 import type { Env } from "./terminal";
-import { log, timingSafeEqual, validDeviceId } from "./util";
+import { log, MIN_DEVICE_TOKEN, secret, timingSafeEqual, validDeviceId } from "./util";
 
 /** Stripe events are a few KB. */
 export const MAX_WEBHOOK_BYTES = 64 * 1024;
@@ -20,11 +20,16 @@ export function checkToken(authorization: string | null, expected: string): bool
 
 async function handleWs(req: Request, env: Env, url: URL): Promise<Response> {
   if (req.method !== "GET") return text("method not allowed", 405);
-  if (!env.DEVICE_TOKEN) {
+  const token = secret(env.DEVICE_TOKEN);
+  if (!token) {
     log("DEVICE_TOKEN secret is not set");
     return text("server misconfigured", 500);
   }
-  if (!checkToken(req.headers.get("Authorization"), env.DEVICE_TOKEN)) {
+  if (token.length < MIN_DEVICE_TOKEN) {
+    log(`DEVICE_TOKEN is too short (${token.length} chars, minimum ${MIN_DEVICE_TOKEN}): set one from \`openssl rand -hex 24\``);
+    return text("server misconfigured", 500);
+  }
+  if (!checkToken(req.headers.get("Authorization"), token)) {
     log("ws auth rejected");
     return text("unauthorized", 401);
   }
@@ -38,11 +43,12 @@ async function handleWebhook(req: Request, env: Env): Promise<Response> {
   const buf = await req.arrayBuffer();
   if (buf.byteLength > MAX_WEBHOOK_BYTES) return text("payload too large", 413);
   const raw = new TextDecoder().decode(buf);
-  if (!(await verifySignature(raw, req.headers.get("Stripe-Signature"), env.STRIPE_WEBHOOK_SECRET ?? ""))) {
-    log(env.STRIPE_WEBHOOK_SECRET ? "webhook rejected: bad signature" : "webhook rejected: STRIPE_WEBHOOK_SECRET is not set");
+  const whsec = secret(env.STRIPE_WEBHOOK_SECRET);
+  if (!(await verifySignature(raw, req.headers.get("Stripe-Signature"), whsec))) {
+    log(whsec ? "webhook rejected: bad signature" : "webhook rejected: STRIPE_WEBHOOK_SECRET is not set");
     return text("bad signature", 400);
   }
-  const e = parseEvent(raw, isLiveKey(env.STRIPE_SECRET_KEY ?? ""));
+  const e = parseEvent(raw, isLiveKey(secret(env.STRIPE_SECRET_KEY)));
   if (!e) return text("ignored"); // authentic but not for us: 200 so Stripe doesn't retry
   try {
     const r = await terminal(env).fetch("https://do/event", { method: "POST", body: JSON.stringify(e) });

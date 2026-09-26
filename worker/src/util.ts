@@ -11,6 +11,12 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
+/** A secret as set with `wrangler secret put`, without the whitespace/newline a paste or a pipe may add. */
+export const secret = (v: string | undefined): string => (v ?? "").trim();
+
+/** Shortest DEVICE_TOKEN the Worker accepts (`openssl rand -hex 24` gives 48). */
+export const MIN_DEVICE_TOKEN = 16;
+
 export async function hmacSha256Hex(secret: string, payload: string): Promise<string> {
   const enc = new TextEncoder();
   const key = await crypto.subtle.importKey("raw", enc.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);

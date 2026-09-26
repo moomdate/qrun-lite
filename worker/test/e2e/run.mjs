@@ -5,6 +5,7 @@
 // Never reads worker/.dev.vars and never calls real Stripe: the Worker runs from a generated config in a temp dir
 // with fake values only, and STRIPE_API_BASE points at ./mock-stripe.mjs (honoured for sk_test_ keys only).
 import { spawn } from "node:child_process";
+import { createHmac } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { createServer } from "node:net";
@@ -33,7 +34,7 @@ function freePort() {
   });
 }
 
-async function startWorker(mockUrl) {
+async function startWorker(mockUrl, { omit = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "qrun-lite-e2e-"));
   const [port, inspector] = [await freePort(), await freePort()];
   const config = {
@@ -52,6 +53,7 @@ async function startWorker(mockUrl) {
       STRIPE_API_BASE: mockUrl,
     },
   };
+  for (const k of omit) delete config.vars[k];
   const cfgPath = join(dir, "wrangler.jsonc");
   writeFileSync(cfgPath, JSON.stringify(config, null, 2));
   const args = [join(WORKER, "node_modules/wrangler/bin/wrangler.js"), "dev", "--config", cfgPath, "--ip", "127.0.0.1", "--port", String(port),
@@ -165,12 +167,12 @@ function eq(a, b, msg) {
 }
 
 /** Raw upgrade request, to read the HTTP status the WebSocket API hides. */
-function upgradeStatus(base, auth) {
+function upgradeStatus(base, auth, query = "") {
   return new Promise((ok, bad) => {
-    const u = new URL(`${base}/ws`);
+    const u = new URL(`${base}/ws${query}`);
     const headers = { Connection: "Upgrade", Upgrade: "websocket", "Sec-WebSocket-Version": "13", "Sec-WebSocket-Key": "dGhlIHNhbXBsZSBub25jZQ==" };
     if (auth) headers.Authorization = auth;
-    const req = request({ host: u.hostname, port: u.port, path: u.pathname, headers });
+    const req = request({ host: u.hostname, port: u.port, path: u.pathname + u.search, headers });
     req.on("response", (r) => (r.resume(), ok(r.statusCode)));
     req.on("upgrade", (r, sock) => (sock.destroy(), ok(r.statusCode)));
     req.on("error", bad);
@@ -243,6 +245,9 @@ function scenarios(B, mock) {
     async bad_token() {
       eq(await upgradeStatus(B, "Bearer wrong"), 401, "wrong token");
       eq(await upgradeStatus(B, undefined), 401, "no token");
+      eq(await upgradeStatus(B, `Bearer ${TOKEN.slice(0, -1)}`), 401, "token minus its last character");
+      eq(await upgradeStatus(B, `Basic ${TOKEN}`), 401, "right token, wrong scheme");
+      eq(await upgradeStatus(B, undefined, `?token=${TOKEN}`), 401, "token in the query string");
       eq(await upgradeStatus(B, `Bearer ${TOKEN}`), 101, "right token");
     },
 
@@ -252,11 +257,108 @@ function scenarios(B, mock) {
       eq(await mock.settle(p.pi, "succeeded", { badSig: true }), 400, "forged webhook rejected");
       await k.none(anyStatus);
       eq((await fetch(`${B}/stripe/webhook`, { method: "POST", body: "{}" })).status, 400, "unsigned webhook rejected");
+      const stale = JSON.stringify({ id: "evt_old", object: "event", livemode: false, type: "payment_intent.succeeded", data: { object: { ...mock.intents.get(p.pi), status: "succeeded" } } });
+      const t = Math.floor(Date.now() / 1000) - 400;
+      const v1 = createHmac("sha256", "whsec_test").update(`${t}.${stale}`).digest("hex");
+      eq((await fetch(`${B}/stripe/webhook`, { method: "POST", body: stale, headers: { "Stripe-Signature": `t=${t},v1=${v1}` } })).status, 400, "replayed (stale) webhook rejected");
+      eq((await fetch(`${B}/stripe/webhook`, { method: "POST", body: "x".repeat(70 * 1024), headers: { "Stripe-Signature": mock.sign("x") } })).status, 413, "oversized webhook");
+      await k.none(anyStatus);
       eq(await mock.fireWebhook(mock.intents.get(p.pi), "payment_intent.succeeded"), 200, "genuine webhook");
       eq((await k.next(status(p.pi))).status, "succeeded", "status after the genuine webhook");
       await k.close();
     },
+
+    async cancel_then_create_quickly() {
+      const k = await Kiosk.connect(B);
+      const a = await k.create(PRICE, "quick1");
+      k.send({ t: "cancel", pi: a.pi });
+      const b = await k.create(PRICE, "quick2"); // right behind the cancel, no waiting
+      eq(b.t, "payment", "second create gets a QR");
+      eq((await k.next(status(a.pi))).status, "canceled", "first one canceled");
+      await mock.idle(); // Stripe's canceled webhook for the first one must not produce anything
+      await k.none(anyStatus);
+      eq([mock.intents.get(a.pi).status, mock.intents.get(b.pi).status], ["canceled", "requires_action"], "Stripe state");
+      k.send({ t: "cancel", pi: b.pi });
+      await k.next(status(b.pi));
+      await mock.idle();
+      await k.close();
+    },
+
+    async create_replaces_pending() {
+      const k = await Kiosk.connect(B);
+      const a = await k.create(PRICE, "repl1");
+      const b = await k.create(PRICE, "repl2");
+      eq(await k.next(status(a.pi)), { t: "status", pi: a.pi, status: "canceled", amount: PRICE, ref: "repl1" }, "old one canceled first");
+      eq(mock.intents.get(a.pi).status, "canceled", "old PI canceled at Stripe");
+      await mock.idle();
+      // A signed webhook about the OLD PaymentIntent (e.g. a late or re-sent delivery) changes nothing.
+      eq(await mock.fireWebhook({ ...mock.intents.get(a.pi), status: "succeeded" }, "payment_intent.succeeded"), 200, "old-PI webhook acknowledged");
+      await k.none(anyStatus);
+      await mock.settle(b.pi, "succeeded");
+      eq((await k.next(status(b.pi))).status, "succeeded", "the new QR still pays");
+      await k.close();
+    },
+
+    async paid_after_cancel_race() {
+      const k = await Kiosk.connect(B);
+      const p = await k.create(PRICE, "race1");
+      await mock.settle(p.pi, "succeeded", { webhook: false }); // paid a moment before the cancel; webhook still in flight
+      k.send({ t: "cancel", pi: p.pi });
+      eq((await k.next(status(p.pi))).status, "succeeded", "Stripe refused the cancel: paid wins");
+      eq(await mock.fireWebhook(mock.intents.get(p.pi), "payment_intent.succeeded"), 200, "late webhook acknowledged");
+      await k.none(anyStatus); // ...and not delivered twice
+      await k.close();
+    },
+
+    async reboot_replays_pending_qr() {
+      let k = await Kiosk.connect(B);
+      const p = await k.create(PRICE, "boot1");
+      await k.close(); // the board reboots while its QR is up
+      await sleep(200);
+      k = await Kiosk.connect(B); // hello
+      const again = await k.next((m) => m.t === "payment");
+      eq([again.pi, again.ref, again.qr, again.expires], [p.pi, p.ref, p.qr, p.expires], "same QR re-sent after hello");
+      k.send({ t: "cancel", pi: again.pi }); // the firmware cancels a QR nobody is waiting for
+      eq((await k.next(status(p.pi))).status, "canceled", "cancelled quietly");
+      eq(mock.intents.get(p.pi).status, "canceled", "and at Stripe");
+      await mock.idle();
+      await k.close();
+    },
+
+    async bad_frames() {
+      const k = await Kiosk.connect(B);
+      const before = { ...mock.calls };
+      k.ws.send("x".repeat(5000));
+      k.ws.send(JSON.stringify({ t: "create", amount: PRICE, ref: "big1", pad: "ก".repeat(2000) })); // 6 KB of UTF-8
+      k.ws.send(new Uint8Array(5000));
+      for (const f of ["not json{", "null", "[]", "42", '{"t":"bogus"}', '{"t":{"x":1}}', '{"t":"cancel","pi":{"$ne":null}}']) k.ws.send(f);
+      k.send({ t: "create", amount: PRICE, ref: "has space" });
+      const errs = [(await k.next((m) => m.t === "error")).msg, (await k.next((m) => m.t === "error")).msg];
+      eq(errs, ["no such payment", "invalid ref (1..40 chars)"], "cancel with an object as pi, then the bad ref (in order)");
+      k.send({ t: "ping" });
+      await k.next((m) => m.t === "pong"); // the link survived all of it
+      await k.none((m) => m.t === "payment" || m.t === "status");
+      eq(mock.calls, before, "no Stripe call");
+      await k.close();
+    },
   };
+}
+
+/** A second Worker started WITHOUT the STRIPE_SECRET_KEY secret: must refuse early, never call Stripe keyless. */
+async function missingKeyScenario(mock) {
+  const W2 = await startWorker(mock.url, { omit: ["STRIPE_SECRET_KEY"] });
+  try {
+    const k = await Kiosk.connect(W2.base);
+    const before = { ...mock.calls };
+    eq(await k.create(PRICE, "nokey1"), { t: "error", ref: "nokey1", msg: "server misconfigured" }, "generic device error");
+    eq(mock.calls, before, "Stripe (mock) never called, not even unauthenticated");
+    const t0 = Date.now();
+    while (!W2.log.join("").includes("STRIPE_SECRET_KEY secret is not set") && Date.now() - t0 < 5000) await sleep(100);
+    if (!W2.log.join("").includes("STRIPE_SECRET_KEY secret is not set")) throw new Error("no clear log line about the missing key");
+    await k.close();
+  } finally {
+    await W2.stop();
+  }
 }
 
 // ---------------------------------------------------------------- main
@@ -274,14 +376,28 @@ try {
     const s = Date.now();
     try {
       await fn();
-      console.log(`PASS  ${name.padEnd(20)} ${String(Date.now() - s).padStart(5)} ms`);
+      console.log(`PASS  ${name.padEnd(26)} ${String(Date.now() - s).padStart(5)} ms`);
     } catch (e) {
       failed++;
-      console.log(`FAIL  ${name.padEnd(20)} ${String(Date.now() - s).padStart(5)} ms\n      ${e.message}`);
+      console.log(`FAIL  ${name.padEnd(26)} ${String(Date.now() - s).padStart(5)} ms\n      ${e.message}`);
+    }
+  }
+  {
+    const s = Date.now();
+    try {
+      await missingKeyScenario(mock);
+      console.log(`PASS  ${"missing_stripe_key".padEnd(26)} ${String(Date.now() - s).padStart(5)} ms`);
+    } catch (e) {
+      failed++;
+      console.log(`FAIL  ${"missing_stripe_key".padEnd(26)} ${String(Date.now() - s).padStart(5)} ms\n      ${e.message}`);
     }
   }
   const c = mock.calls;
-  console.log(`stripe calls: create=${c.create} get=${c.get} cancel=${c.cancel}`);
+  console.log(`stripe calls: create=${c.create} get=${c.get} cancel=${c.cancel} unauthorized=${c.unauthorized}`);
+  if (c.unauthorized) {
+    failed++;
+    console.log("FAIL  the Worker called Stripe with a missing or wrong key");
+  }
   console.log(`${failed ? "FAILED" : "all passed"} in ${Date.now() - t0} ms`);
   if (failed && !VERBOSE) console.log(`--- wrangler log tail ---\n${W.log.join("").split("\n").slice(-30).join("\n")}`);
 } catch (e) {

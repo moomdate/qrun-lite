@@ -22,11 +22,25 @@ export type StripeResult = { ok: true; pi: PaymentIntent; replayed: boolean } | 
 export const isLiveKey = (key: string) => key.startsWith("sk_live_") || key.startsWith("rk_live_");
 const isTestKey = (key: string) => key.startsWith("sk_test_") || key.startsWith("rk_test_");
 
+/** deviceError() code for "we refused to call Stripe with this configuration". */
+export const MISCONFIGURED = "server_misconfigured";
+
+/** Why STRIPE_SECRET_KEY can't be used (never includes the value), or null if it looks like a secret/restricted key. */
+export function keyProblem(key: string): string | null {
+  if (!key) return "STRIPE_SECRET_KEY secret is not set";
+  if (!/^(sk|rk)_(test|live)_[A-Za-z0-9]+$/.test(key)) {
+    return "STRIPE_SECRET_KEY is not a Stripe secret key (expected sk_test_/sk_live_/rk_test_/rk_live_ followed by letters and digits)";
+  }
+  return null;
+}
+
 function apiBase(cfg: StripeCfg): string {
   return (isTestKey(cfg.key) && cfg.base ? cfg.base : "https://api.stripe.com").replace(/\/+$/, "") + "/v1";
 }
 
 async function call(cfg: StripeCfg, method: "GET" | "POST", path: string, form?: URLSearchParams, idemKey?: string): Promise<StripeResult> {
+  const problem = keyProblem(cfg.key);
+  if (problem) return { ok: false, status: -1, msg: `${problem}; Stripe not called`, code: MISCONFIGURED }; // fail closed
   const headers: Record<string, string> = { Authorization: `Bearer ${cfg.key}` };
   if (method === "POST") headers["Content-Type"] = "application/x-www-form-urlencoded";
   if (idemKey) headers["Idempotency-Key"] = idemKey;
@@ -66,6 +80,7 @@ export const cancelIntent = (cfg: StripeCfg, id: string) => call(cfg, "POST", `/
 
 /** What the device may see of a Stripe failure: the error code at most, never Stripe's message text. */
 export function deviceError(r: { status: number; code?: string }): string {
+  if (r.code === MISCONFIGURED) return "server misconfigured";
   if (r.status === 0) return "payment provider unreachable";
   if (r.code && /^[a-z0-9_]{1,60}$/.test(r.code)) return `payment provider error (${r.code})`;
   return `payment provider error (HTTP ${r.status})`;

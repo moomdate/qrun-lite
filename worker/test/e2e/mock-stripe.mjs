@@ -14,7 +14,7 @@ export function startMockStripe({ webhookSecret = "whsec_test" } = {}) {
   const cfg = { webhookUrl: "" };
   const intents = new Map();
   const idem = new Map();
-  const calls = { create: 0, get: 0, cancel: 0 };
+  const calls = { create: 0, get: 0, cancel: 0, unauthorized: 0 };
   const pending = new Set();
 
   const sign = (body, secret = webhookSecret) => {
@@ -46,7 +46,10 @@ export function startMockStripe({ webhookSecret = "whsec_test" } = {}) {
     let body = "";
     for await (const c of req) body += c;
     const path = new URL(req.url, "http://x").pathname;
-    if (req.headers.authorization !== `Bearer ${KEY}`) return err(res, 401, "Invalid API Key provided");
+    if (req.headers.authorization !== `Bearer ${KEY}`) {
+      calls.unauthorized++;
+      return err(res, 401, req.headers.authorization ? "Invalid API Key provided" : "You did not provide an API key.");
+    }
 
     if (req.method === "POST" && path === "/v1/payment_intents") {
       const ik = req.headers["idempotency-key"];
@@ -101,6 +104,7 @@ export function startMockStripe({ webhookSecret = "whsec_test" } = {}) {
         intents,
         calls,
         fireWebhook,
+        sign,
         /** Customer pays (or the payment fails) at the bank; by default Stripe then sends the webhook. */
         async settle(id, outcome, { webhook = true, badSig = false } = {}) {
           const pi = intents.get(id);
