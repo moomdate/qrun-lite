@@ -319,3 +319,18 @@ describe("frame limit", () => {
     expect(s.stripe.calls).toHaveLength(0);
   });
 });
+
+describe("STRIPE_API_BASE (test hook)", () => {
+  it.each([
+    ["a remote host, test key", "https://evil.example", "sk_test_unit", "https://api.stripe.com"],
+    ["loopback, live key", "http://127.0.0.1:9", "sk_live_unit", "https://api.stripe.com"],
+    ["loopback, test key", "http://127.0.0.1:9", "sk_test_unit", "http://127.0.0.1:9"],
+    ["localhost, test key", "http://localhost:9/", "sk_test_unit", "http://localhost:9"],
+  ])("%s", async (_what, base, key, origin) => {
+    const s = setup({ STRIPE_API_BASE: base, STRIPE_SECRET_KEY: key });
+    const ws = s.connect();
+    await s.say(ws, { t: "create", amount: 2000, ref: "r1" });
+    const url = (fetch as unknown as { mock: { calls: [string][] } }).mock.calls[0]![0];
+    expect(new URL(url).origin).toBe(new URL(origin).origin);
+  });
+});

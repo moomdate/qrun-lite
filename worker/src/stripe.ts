@@ -3,7 +3,8 @@ import { hmacSha256Hex, timingSafeEqual } from "./util";
 
 export interface StripeCfg {
   key: string;
-  /** STRIPE_API_BASE, for the local mock in tests. Honoured for test keys only, so a live key never goes elsewhere. */
+  /** STRIPE_API_BASE, for the local mock in tests. Honoured only for test keys AND a loopback http(s) URL, so no key
+   *  ever leaves for another host, whatever the var says. */
   base?: string;
 }
 
@@ -34,8 +35,11 @@ export function keyProblem(key: string): string | null {
   return null;
 }
 
+const isLoopback = (base: string) => /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d{1,5})?\/*$/.test(base);
+
 function apiBase(cfg: StripeCfg): string {
-  return (isTestKey(cfg.key) && cfg.base ? cfg.base : "https://api.stripe.com").replace(/\/+$/, "") + "/v1";
+  const base = isTestKey(cfg.key) && cfg.base && isLoopback(cfg.base) ? cfg.base : "https://api.stripe.com";
+  return base.replace(/\/+$/, "") + "/v1";
 }
 
 async function call(cfg: StripeCfg, method: "GET" | "POST", path: string, form?: URLSearchParams, idemKey?: string): Promise<StripeResult> {

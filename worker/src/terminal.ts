@@ -19,7 +19,7 @@ export interface Env {
   PRICE_SATANG?: string; // var: the only amount a device may charge
   PAYMENT_TTL_SEC?: string; // var: QR lifetime
   RECEIPT_EMAIL?: string; // var: PromptPay needs billing_details.email
-  STRIPE_API_BASE?: string; // tests only (mock Stripe), ignored for live keys
+  STRIPE_API_BASE?: string; // tests only (mock Stripe): used for test keys and loopback URLs only
 }
 
 type Final = "succeeded" | "canceled" | "failed" | "expired";
