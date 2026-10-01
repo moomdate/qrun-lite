@@ -1,0 +1,20 @@
+Required Notice: Copyright (c) 2026 moomdate (https://github.com/moomdate/qrun-lite)
+Required Notice: QRun Lite is crafted by birdlab.th (https://birdlab.moomdate.tech). Builds you distribute must keep the boot-splash credit visible.
+
+QRun Lite: pay-to-run kiosk for the CYD (ESP32-2432S028R)
+Licensed under the MIT License (see LICENSE). That covers the source code.
+
+The birdlab.th logo (tools/art/birdlab-logo.png, firmware/include/logo_birdlab.h and
+logo_birdlab_small.h, generated from it) is the project author's brand. It is NOT licensed
+under MIT: it is included only as credit. Keep it, together with the "crafted by" boot
+splash, when you share QRun Lite or modified versions of it. Do not use it to brand other
+products.
+
+Being plain about it: the MIT License by itself does not oblige you to keep an on-screen
+credit. The paragraph above is the project's attribution request; what the author can
+enforce is the logo carve-out (the brand is not MIT-licensed). The firmware also checks that
+the credit assets are unmodified and that the splash ran: if not, the kiosk's header reads
+"UNOFFICIAL" instead of the brand name. Payments keep working either way. This is a label,
+not a lock.
+
+Third-party components and their licenses: THIRD_PARTY_NOTICES.md

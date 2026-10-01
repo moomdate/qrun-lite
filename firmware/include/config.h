@@ -4,6 +4,9 @@
 
 namespace cfg {
 
+// Shown top-left on the screen (ASCII or Thai; the smooth fonts have no other scripts).
+static constexpr const char* BRAND_NAME = "QRun Lite";
+
 // Price of one run, in satang (2000 = ฿20). Stripe's minimum for THB is ฿10 (1000).
 // MUST be the same number as PRICE_SATANG in worker/wrangler.jsonc: the Worker refuses any other amount.
 static constexpr uint32_t PRICE_SATANG = 2000;

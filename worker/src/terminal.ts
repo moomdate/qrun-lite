@@ -1,37 +1,29 @@
 // The Durable Object: holds the kiosk's WebSocket (hibernation API) and its one payment.
 //
 //   create ──▶ pending ──(webhook / hello re-fetch: paid)──▶ succeeded
-//                 │    ──(webhook: failed)──────────────────▶ failed    (PI canceled at Stripe)
+//                 │    ──(webhook: failed)──────────────────▶ failed    (canceled at the provider)
 //                 │    ──(device cancel / new create)───────▶ canceled
-//                 └────(alarm at expiry)────────────────────▶ expired   (PI canceled at Stripe)
+//                 └────(alarm at expiry)────────────────────▶ expired   (canceled at the provider)
 //
 // A final status is pushed to the socket and then forgotten. If the kiosk was offline, it is kept and sent on the
 // next `hello`. Best effort: a status sent into a half-open socket is lost (QRun Pro adds replay/recovery for that).
-import { cancelIntent, createPromptPay, deviceError, getIntent, isLiveKey, keyProblem, type StripeCfg, type StripeResult } from "./stripe";
-import type { PaymentEvent } from "./stripe";
-import { log, parsePrice, secret, validRef } from "./util";
+import type { Env } from "./env";
+import { resolveProvider } from "./providers";
+import type { PaymentEvent, PaymentProvider, PaymentStatus } from "./providers/types";
+import { log, parsePrice, validRef } from "./util";
 
-export interface Env {
-  TERMINAL: DurableObjectNamespace;
-  STRIPE_SECRET_KEY?: string; // secret
-  STRIPE_WEBHOOK_SECRET?: string; // secret
-  DEVICE_TOKEN?: string; // secret
-  PRICE_SATANG?: string; // var: the only amount a device may charge
-  PAYMENT_TTL_SEC?: string; // var: QR lifetime
-  RECEIPT_EMAIL?: string; // var: PromptPay needs billing_details.email
-  STRIPE_API_BASE?: string; // tests only (mock Stripe): used for test keys and loopback URLs only
-}
+export type { Env };
 
 type Final = "succeeded" | "canceled" | "failed" | "expired";
 
 export interface Payment {
-  pi: string;
+  id: string; // the provider's payment id (the wire protocol calls it `pi`)
   ref: string;
   amount: number;
   qr: string;
   expires: number; // unix seconds
   status: "pending" | Final;
-  cancelReason?: "canceled" | "expired"; // why *we* canceled it: a later `canceled` webhook keeps "expired"
+  cancelReason?: "canceled" | "expired"; // why *we* canceled it: a later `canceled` event keeps "expired"
 }
 
 export const FRAME_MAX = 4096;
@@ -47,6 +39,11 @@ export class Terminal {
   ) {
     // {"t":"ping"} is answered by the runtime without waking the object from hibernation.
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('{"t":"ping"}', '{"t":"pong"}'));
+  }
+
+  /** Rebuilt per use from the env, so a config change takes effect on the next call. */
+  private get provider(): PaymentProvider {
+    return resolveProvider(this.env);
   }
 
   async fetch(req: Request): Promise<Response> {
@@ -68,7 +65,7 @@ export class Terminal {
 
   async webSocketMessage(ws: WebSocket, msg: string | ArrayBuffer): Promise<void> {
     if (frameBytes(msg) > FRAME_MAX) return;
-    let m: { t?: unknown; amount?: unknown; ref?: unknown; pi?: unknown };
+    let m: { t?: unknown; amount?: unknown; ref?: unknown; pi?: unknown }; // `pi`: the wire name of the payment id
     try {
       m = JSON.parse(typeof msg === "string" ? msg : new TextDecoder().decode(msg));
     } catch {
@@ -99,7 +96,7 @@ export class Terminal {
 
   private async onHello(ws: WebSocket): Promise<void> {
     const device = (await this.ctx.storage.get<string>("device")) ?? "kiosk";
-    send(ws, { t: "hello", device, live: isLiveKey(this.stripe.key) });
+    send(ws, { t: "hello", device, live: this.provider.isLive() });
     const p = await this.load();
     if (!p) return;
     if (p.status !== "pending") {
@@ -107,10 +104,10 @@ export class Terminal {
       if (send(ws, statusMsg(p))) await this.ctx.storage.delete(KEY);
       return;
     }
-    // Still pending: ask Stripe, in case it was paid while we missed the webhook.
-    const g = await getIntent(this.stripe, p.pi);
-    if (!g.ok) log(`hello: re-fetch ${p.pi} failed: ${g.msg}`);
-    const st = g.ok ? finalOf(g, p) : null;
+    // Still pending: ask the provider, in case it was paid while we missed the webhook.
+    const g = await this.provider.getStatus(p.id);
+    if (!g.ok) log(`hello: re-fetch ${p.id} failed: ${g.msg}`);
+    const st = g.ok ? finalOf(g.value, p) : null;
     if (st) return this.finalize(p, st);
     send(ws, paymentMsg(p));
   }
@@ -126,9 +123,10 @@ export class Terminal {
       log(`create ${ref}: amount ${String(amount).slice(0, 20)} != PRICE_SATANG ${price}, rejected`);
       return void send(ws, { t: "error", ref, msg: "amount not allowed" });
     }
-    const keyError = keyProblem(this.stripe.key);
+    const provider = this.provider;
+    const keyError = provider.configProblem();
     if (keyError) {
-      log(`create ${ref}: ${keyError}; refused without calling Stripe`); // e.g. "You did not provide an API key"
+      log(`create ${ref}: ${keyError}; refused without calling the provider`); // e.g. "You did not provide an API key"
       return void send(ws, { t: "error", ref, msg: "server misconfigured" });
     }
 
@@ -142,43 +140,33 @@ export class Terminal {
     }
 
     const device = (await this.ctx.storage.get<string>("device")) ?? "kiosk";
-    const r = await createPromptPay(this.stripe, { amount: price, device, ref, email: this.env.RECEIPT_EMAIL ?? "" });
+    const r = await provider.createQr({ amount: price, device, ref, email: this.env.RECEIPT_EMAIL ?? "" });
     if (!r.ok) {
       log(`create ${ref} failed: HTTP ${r.status} ${r.code ?? ""} ${r.msg}`);
-      return void send(ws, { t: "error", ref, msg: deviceError(r) });
+      return void send(ws, { t: "error", ref, msg: r.deviceMsg });
     }
-    if (r.replayed) {
-      // Stripe answered from its idempotency cache: that QR may be long finished. Never show it.
-      log(`create ${ref}: ref reused, rejected`);
-      return void send(ws, { t: "error", ref, msg: "duplicate ref" });
-    }
-    const qr = r.pi.next_action?.promptpay_display_qr_code?.data;
-    if (r.pi.status !== "requires_action" || !qr) {
-      log(`create ${ref}: no QR in ${r.pi.id} (status ${r.pi.status})`);
-      return void send(ws, { t: "error", ref, msg: `unexpected PaymentIntent state: ${r.pi.status}` });
-    }
-    const p: Payment = { pi: r.pi.id, ref, amount: r.pi.amount, qr, expires: nowSec() + this.ttl, status: "pending" };
+    const p: Payment = { id: r.value.id, ref, amount: r.value.amount, qr: r.value.qrPayload, expires: nowSec() + this.ttl, status: "pending" };
     await this.ctx.storage.put(KEY, p);
     await this.ctx.storage.setAlarm(p.expires * 1000);
-    log(`created ${p.pi} ref=${ref} amount=${p.amount}`);
+    log(`created ${p.id} ref=${ref} amount=${p.amount}`);
     send(ws, paymentMsg(p));
   }
 
-  private async onCancel(ws: WebSocket, pi: unknown): Promise<void> {
+  private async onCancel(ws: WebSocket, id: unknown): Promise<void> {
     const p = await this.load();
-    if (!p || p.pi !== pi || p.status !== "pending") return void send(ws, { t: "error", msg: "no such payment" });
+    if (!p || p.id !== id || p.status !== "pending") return void send(ws, { t: "error", msg: "no such payment" });
     const st = await this.cancelOrCheck(p, "canceled");
     if (!st) return void send(ws, { t: "error", ref: p.ref, msg: "cancel failed, try again" });
     await this.finalize(p, st);
   }
 
-  /** A signed Stripe event (already verified by the router). */
+  /** A verified provider event (authenticated by the router via the provider). */
   private async onEvent(e: PaymentEvent): Promise<void> {
     const p = await this.load();
-    if (!p || p.pi !== e.pi || p.status !== "pending") return log(`webhook ${e.outcome} ${e.pi}: not the pending payment, ignored`);
+    if (!p || p.id !== e.id || p.status !== "pending") return log(`webhook ${e.outcome} ${e.id}: not the pending payment, ignored`);
     // Defense in depth: the event must describe exactly the payment we created.
     if (e.amount !== p.amount || e.currency !== "thb" || e.ref !== p.ref) {
-      return log(`webhook ${e.outcome} ${e.pi}: amount/currency/ref mismatch, ignored`);
+      return log(`webhook ${e.outcome} ${e.id}: amount/currency/ref mismatch, ignored`);
     }
     await this.finalize(p, e.outcome === "canceled" ? (p.cancelReason ?? "canceled") : e.outcome);
   }
@@ -189,7 +177,7 @@ export class Terminal {
     if (p.expires * 1000 > Date.now() + 1000) return this.ctx.storage.setAlarm(p.expires * 1000);
     const st = await this.cancelOrCheck(p, "expired");
     if (!st) {
-      log(`expire ${p.pi}: Stripe call failed, retry in 30 s`);
+      log(`expire ${p.id}: provider call failed, retry in 30 s`);
       return this.ctx.storage.setAlarm(Date.now() + 30_000);
     }
     await this.finalize(p, st);
@@ -197,22 +185,22 @@ export class Terminal {
 
   // ---------------------------------------------------------------- helpers
 
-  /** Cancel at Stripe. If Stripe refuses (e.g. it was just paid), ask for the real status. null = unknown. */
+  /** Cancel at the provider. If it refuses (e.g. it was just paid), ask for the real status. null = unknown. */
   private async cancelOrCheck(p: Payment, reason: "canceled" | "expired"): Promise<Final | null> {
     p.cancelReason = reason;
     await this.ctx.storage.put(KEY, p);
-    const c = await cancelIntent(this.stripe, p.pi);
+    const c = await this.provider.cancel(p.id);
     if (c.ok) return reason;
-    log(`cancel ${p.pi} refused: ${c.msg}; re-fetching`);
-    const g = await getIntent(this.stripe, p.pi);
-    return g.ok ? finalOf(g, p) : null;
+    log(`cancel ${p.id} refused: ${c.msg}; re-fetching`);
+    const g = await this.provider.getStatus(p.id);
+    return g.ok ? finalOf(g.value, p) : null;
   }
 
   /** Mark final and push it; forget it once a socket took it, else keep it for the next hello. */
   private async finalize(p: Payment, st: Final): Promise<void> {
     if (st === "failed") {
-      const c = await cancelIntent(this.stripe, p.pi); // a failed PromptPay attempt must not stay payable
-      if (!c.ok) log(`cancel after failure ${p.pi}: ${c.msg}`);
+      const c = await this.provider.cancel(p.id); // a failed attempt must not stay payable
+      if (!c.ok) log(`cancel after failure ${p.id}: ${c.msg}`);
     }
     p.status = st;
     await this.ctx.storage.deleteAlarm();
@@ -220,22 +208,18 @@ export class Terminal {
     for (const ws of this.ctx.getWebSockets()) delivered = send(ws, statusMsg(p)) || delivered;
     if (delivered) await this.ctx.storage.delete(KEY);
     else await this.ctx.storage.put(KEY, p);
-    log(`${p.pi} ${st} (${delivered ? "delivered" : "kept for next hello"})`);
+    log(`${p.id} ${st} (${delivered ? "delivered" : "kept for next hello"})`);
   }
 
-  /** Serialize state changes: the Stripe calls in between would otherwise let events interleave. */
+  /** Serialize state changes: the provider calls in between would otherwise let events interleave. */
   private serial<T>(fn: () => Promise<T>): Promise<T> {
     const r = this.chain.then(fn);
     this.chain = r.catch(() => undefined);
     return r;
   }
 
-  private load(): Promise<Payment | undefined> {
-    return this.ctx.storage.get<Payment>(KEY);
-  }
-
-  private get stripe(): StripeCfg {
-    return { key: secret(this.env.STRIPE_SECRET_KEY), base: this.env.STRIPE_API_BASE };
+  private async load(): Promise<Payment | undefined> {
+    return upgradeRecord(await this.ctx.storage.get<Payment | StoredV1>(KEY));
   }
 
   private get ttl(): number {
@@ -244,23 +228,31 @@ export class Terminal {
   }
 }
 
-/** Stripe status of the stored payment -> final status, or null while still pending. */
-function finalOf(g: Extract<StripeResult, { ok: true }>, p: Payment): Final | null {
-  switch (g.pi.status) {
+/** Provider status of the stored payment -> final status, or null while still pending. */
+function finalOf(status: PaymentStatus, p: Payment): Final | null {
+  switch (status) {
     case "succeeded":
-      return "succeeded";
+    case "failed":
+      return status;
     case "canceled":
       return p.cancelReason ?? "canceled";
-    case "requires_payment_method": // a failed PromptPay attempt
-      return "failed";
     default:
-      return null; // requires_action (QR shown) / processing
+      return null; // pending
   }
 }
 
+/** Records written before the provider interface kept the payment id in `pi`. A Durable Object deployed with one
+ *  pending payment must keep working: read it as `id` (the next write stores the new shape). */
+type StoredV1 = Omit<Payment, "id"> & { pi: string; id?: undefined };
+export function upgradeRecord(r: Payment | StoredV1 | undefined): Payment | undefined {
+  if (!r || typeof r.id === "string") return r as Payment | undefined;
+  const { pi, ...rest } = r as StoredV1;
+  return { ...rest, id: pi };
+}
+
 const nowSec = () => Math.floor(Date.now() / 1000);
-const paymentMsg = (p: Payment) => ({ t: "payment", pi: p.pi, ref: p.ref, amount: p.amount, qr: p.qr, expires: p.expires });
-const statusMsg = (p: Payment) => ({ t: "status", pi: p.pi, status: p.status, amount: p.amount, ref: p.ref });
+const paymentMsg = (p: Payment) => ({ t: "payment", pi: p.id, ref: p.ref, amount: p.amount, qr: p.qr, expires: p.expires });
+const statusMsg = (p: Payment) => ({ t: "status", pi: p.id, status: p.status, amount: p.amount, ref: p.ref });
 
 /** Frame size in bytes (a JS string length counts UTF-16 units: Thai text is 3 bytes per character). */
 function frameBytes(msg: string | ArrayBuffer): number {

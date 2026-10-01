@@ -1,5 +1,8 @@
-// Stripe: a tiny REST client for PromptPay PaymentIntents (plain fetch, no SDK) + webhook verification.
-import { hmacSha256Hex, timingSafeEqual } from "./util";
+// Stripe provider: a tiny REST client for PromptPay PaymentIntents (plain fetch, no SDK) + webhook verification.
+// All Stripe vocabulary (PaymentIntent, pi_, requires_action, Stripe-Signature) lives in this file only.
+import type { Env } from "../env";
+import { hmacSha256Hex, secret, timingSafeEqual } from "../util";
+import type { CreateArgs, PaymentEvent, PaymentProvider, PaymentStatus, ProviderResult, QrPayment, WebhookResult } from "./types";
 
 export interface StripeCfg {
   key: string;
@@ -8,7 +11,7 @@ export interface StripeCfg {
   base?: string;
 }
 
-export interface PaymentIntent {
+interface PaymentIntent {
   id: string;
   amount: number;
   currency: string;
@@ -18,13 +21,13 @@ export interface PaymentIntent {
   next_action?: { promptpay_display_qr_code?: { data?: string } } | null;
 }
 
-export type StripeResult = { ok: true; pi: PaymentIntent; replayed: boolean } | { ok: false; status: number; msg: string; code?: string };
+type StripeResult = { ok: true; pi: PaymentIntent; replayed: boolean } | { ok: false; status: number; msg: string; code?: string };
 
 export const isLiveKey = (key: string) => key.startsWith("sk_live_") || key.startsWith("rk_live_");
 const isTestKey = (key: string) => key.startsWith("sk_test_") || key.startsWith("rk_test_");
 
-/** deviceError() code for "we refused to call Stripe with this configuration". */
-export const MISCONFIGURED = "server_misconfigured";
+/** error code for "we refused to call Stripe with this configuration". */
+const MISCONFIGURED = "server_misconfigured";
 
 /** Why STRIPE_SECRET_KEY can't be used (never includes the value), or null if it looks like a secret/restricted key. */
 export function keyProblem(key: string): string | null {
@@ -64,30 +67,85 @@ async function call(cfg: StripeCfg, method: "GET" | "POST", path: string, form?:
   return { ok: true, pi: json as PaymentIntent, replayed: res.headers.get("Idempotent-Replayed") === "true" };
 }
 
-export function createPromptPay(cfg: StripeCfg, a: { amount: number; device: string; ref: string; email: string }): Promise<StripeResult> {
-  const f = new URLSearchParams({
-    amount: String(a.amount),
-    currency: "thb",
-    "payment_method_types[]": "promptpay",
-    "payment_method_data[type]": "promptpay",
-    "payment_method_data[billing_details][email]": a.email, // PromptPay requires an email
-    confirm: "true",
-    "metadata[device_id]": a.device,
-    "metadata[ref]": a.ref,
-    description: `QRun Lite ${a.ref}`,
-  });
-  return call(cfg, "POST", "/payment_intents", f, `${a.device}:${a.ref}`);
-}
-
-export const getIntent = (cfg: StripeCfg, id: string) => call(cfg, "GET", `/payment_intents/${encodeURIComponent(id)}`);
-export const cancelIntent = (cfg: StripeCfg, id: string) => call(cfg, "POST", `/payment_intents/${encodeURIComponent(id)}/cancel`);
-
 /** What the device may see of a Stripe failure: the error code at most, never Stripe's message text. */
-export function deviceError(r: { status: number; code?: string }): string {
+function deviceError(r: { status: number; code?: string }): string {
   if (r.code === MISCONFIGURED) return "server misconfigured";
   if (r.status === 0) return "payment provider unreachable";
   if (r.code && /^[a-z0-9_]{1,60}$/.test(r.code)) return `payment provider error (${r.code})`;
   return `payment provider error (HTTP ${r.status})`;
+}
+
+const fail = (r: { status: number; msg: string; code?: string }): ProviderResult<never> => ({ ...r, ok: false, deviceMsg: deviceError(r) });
+
+/** Stripe PaymentIntent status -> neutral status. */
+function statusOf(s: string): PaymentStatus {
+  switch (s) {
+    case "succeeded":
+      return "succeeded";
+    case "canceled":
+      return "canceled";
+    case "requires_payment_method": // a failed PromptPay attempt
+      return "failed";
+    default:
+      return "pending"; // requires_action (QR shown) / processing
+  }
+}
+
+export class StripeProvider implements PaymentProvider {
+  readonly name = "stripe";
+  private readonly cfg: StripeCfg;
+  private readonly whsec: string;
+
+  constructor(env: Env) {
+    this.cfg = { key: secret(env.STRIPE_SECRET_KEY), base: env.STRIPE_API_BASE };
+    this.whsec = secret(env.STRIPE_WEBHOOK_SECRET);
+  }
+
+  isLive = () => isLiveKey(this.cfg.key);
+  configProblem = () => keyProblem(this.cfg.key);
+
+  async createQr(a: CreateArgs): Promise<ProviderResult<QrPayment>> {
+    const f = new URLSearchParams({
+      amount: String(a.amount),
+      currency: "thb",
+      "payment_method_types[]": "promptpay",
+      "payment_method_data[type]": "promptpay",
+      "payment_method_data[billing_details][email]": a.email, // PromptPay requires an email
+      confirm: "true",
+      "metadata[device_id]": a.device,
+      "metadata[ref]": a.ref,
+      description: `QRun Lite ${a.ref}`,
+    });
+    const r = await call(this.cfg, "POST", "/payment_intents", f, `${a.device}:${a.ref}`);
+    if (!r.ok) return fail(r);
+    if (r.replayed) {
+      // Stripe answered from its idempotency cache: that QR may be long finished. Never show it.
+      return { ok: false, status: 200, msg: "answered from the idempotency cache", code: "replayed", deviceMsg: "duplicate ref" };
+    }
+    const qr = r.pi.next_action?.promptpay_display_qr_code?.data;
+    if (r.pi.status !== "requires_action" || !qr) {
+      return { ok: false, status: 200, msg: `no QR in ${r.pi.id} (status ${r.pi.status})`, code: "unexpected_state", deviceMsg: `unexpected PaymentIntent state: ${r.pi.status}` };
+    }
+    return { ok: true, value: { id: r.pi.id, qrPayload: qr, amount: r.pi.amount } };
+  }
+
+  async getStatus(id: string): Promise<ProviderResult<PaymentStatus>> {
+    const r = await call(this.cfg, "GET", `/payment_intents/${encodeURIComponent(id)}`);
+    return r.ok ? { ok: true, value: statusOf(r.pi.status) } : fail(r);
+  }
+
+  async cancel(id: string): Promise<ProviderResult<void>> {
+    const r = await call(this.cfg, "POST", `/payment_intents/${encodeURIComponent(id)}/cancel`);
+    return r.ok ? { ok: true, value: undefined } : fail(r);
+  }
+
+  async parseWebhook(raw: string, headers: Headers): Promise<WebhookResult> {
+    if (!(await verifySignature(raw, headers.get("Stripe-Signature"), this.whsec))) {
+      return { kind: "bad", reason: this.whsec ? "bad signature" : "STRIPE_WEBHOOK_SECRET is not set" };
+    }
+    const event = parseEvent(raw, this.isLive());
+    return event ? { kind: "event", event } : { kind: "ignored" };
+  }
 }
 
 // ---------------------------------------------------------------- webhooks
@@ -115,15 +173,6 @@ export async function verifySignature(rawBody: string, header: string | null, se
   return match;
 }
 
-/** A verified event the Durable Object may act on (it still checks pi/amount/ref against its stored payment). */
-export interface PaymentEvent {
-  outcome: "succeeded" | "failed" | "canceled";
-  pi: string;
-  amount: number;
-  currency: string;
-  ref: string;
-}
-
 const OUTCOMES: Record<string, PaymentEvent["outcome"]> = {
   "payment_intent.succeeded": "succeeded",
   "payment_intent.payment_failed": "failed",
@@ -144,7 +193,7 @@ export function parseEvent(raw: string, live: boolean): PaymentEvent | null {
   if (outcome === "succeeded" && o.status !== "succeeded") return null;
   return {
     outcome,
-    pi: o.id,
+    id: o.id,
     amount: typeof o.amount === "number" ? o.amount : -1,
     currency: typeof o.currency === "string" ? o.currency : "",
     ref: typeof o.metadata?.ref === "string" ? o.metadata.ref : "",

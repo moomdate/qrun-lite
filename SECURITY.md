@@ -66,5 +66,5 @@ texts. The firmware checks the Worker's TLS certificate against pinned root CAs 
 - **Serial log.** The USB serial log shows payment ids and QR data (not secrets). Anyone with physical USB access
   can read it.
 - **Dependencies.** The Worker has no runtime dependencies; build tools are locked by `package-lock.json` (CI uses
-  `npm ci` and runs `npm audit`). Firmware libraries and the platform are pinned in `platformio.ini`. TFT_Touch has
-  no upstream license file (see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+  `npm ci` and runs `npm audit`). Firmware libraries and the platform are pinned in `platformio.ini` (licenses in
+  [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

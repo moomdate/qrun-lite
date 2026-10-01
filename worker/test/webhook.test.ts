@@ -1,6 +1,6 @@
 // Stripe webhook signature verification and event parsing.
 import { describe, expect, it } from "vitest";
-import { parseEvent, verifySignature } from "../src/stripe";
+import { parseEvent, verifySignature } from "../src/providers/stripe";
 import { hmacSha256Hex } from "../src/util";
 
 const SECRET = "whsec_unit";
@@ -52,7 +52,7 @@ describe("parseEvent", () => {
     });
 
   it("maps the three handled event types", () => {
-    expect(parseEvent(ev(), false)).toEqual({ outcome: "succeeded", pi: "pi_1", amount: 2000, currency: "thb", ref: "r1" });
+    expect(parseEvent(ev(), false)).toEqual({ outcome: "succeeded", id: "pi_1", amount: 2000, currency: "thb", ref: "r1" });
     expect(parseEvent(ev({ type: "payment_intent.payment_failed" }, { status: "requires_payment_method" }), false)?.outcome).toBe("failed");
     expect(parseEvent(ev({ type: "payment_intent.canceled" }, { status: "canceled" }), false)?.outcome).toBe("canceled");
   });
@@ -70,6 +70,6 @@ describe("parseEvent", () => {
   });
 
   it("accepts live events only with a live key", () => {
-    expect(parseEvent(ev({ livemode: true }), true)?.pi).toBe("pi_1");
+    expect(parseEvent(ev({ livemode: true }), true)?.id).toBe("pi_1");
   });
 });

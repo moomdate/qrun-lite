@@ -92,7 +92,7 @@ describe("webhook", () => {
   it("routes a correctly signed event to the Durable Object", async () => {
     const { env, hits } = envWithDo();
     expect((await call(post(body, await signed(body)), env)).status).toBe(200);
-    expect(JSON.parse(hits[0]!.body)).toEqual({ outcome: "succeeded", pi: "pi_1", amount: 2000, currency: "thb", ref: "r1" });
+    expect(JSON.parse(hits[0]!.body)).toEqual({ outcome: "succeeded", id: "pi_1", amount: 2000, currency: "thb", ref: "r1" });
   });
 
   it.each([

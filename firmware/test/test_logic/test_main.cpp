@@ -2,6 +2,10 @@
 #include <string>
 #include <unity.h>
 #include "config.h"
+#include "credit.h"
+#include "credit_crc.h"
+#include "logo_birdlab.h"
+#include "logo_birdlab_small.h"
 #include "logic.h"
 
 using namespace lite;
@@ -156,6 +160,50 @@ static void test_reset_reason_names() {
   TEST_ASSERT_FALSE(resetWasFault(3));
 }
 
+void test_splash_never_runs_the_relay() {
+  // Paid during the splash: deferred, not run. Other frames can't change the screen or show a QR.
+  TEST_ASSERT_EQUAL(DEFER_RUN, onStatus(at(SPLASH), "pi_1", "succeeded"));
+  TEST_ASSERT_EQUAL(IGNORE, onStatus(at(SPLASH, "", "", "pi_1"), "pi_1", "succeeded"));   // already ran
+  TEST_ASSERT_EQUAL(IGNORE, onStatus(at(SPLASH), "pi_1", "canceled"));
+  TEST_ASSERT_EQUAL(IGNORE, onStatus(at(SPLASH), "pi_1", "expired"));
+  TEST_ASSERT_EQUAL(DISCARD_QR, onPayment(at(SPLASH), "pi_1", "r1", "QR"));   // stale QR after a reboot
+  TEST_ASSERT_EQUAL(IGNORE, onError(at(SPLASH), ""));
+  TEST_ASSERT_EQUAL(IGNORE, onError(at(SPLASH), "r1"));
+  TEST_ASSERT_EQUAL(RUN, onStatus(at(IDLE), "pi_1", "succeeded"));           // unchanged outside the splash
+}
+
+void test_crc32() {
+  const char* v = "123456789";
+  TEST_ASSERT_EQUAL_HEX32(0xCBF43926u, crc32(0, (const uint8_t*)v, 9));
+  uint32_t c = crc32(0, (const uint8_t*)v, 4);
+  TEST_ASSERT_EQUAL_HEX32(0xCBF43926u, crc32(c, (const uint8_t*)v + 4, 5));   // continues
+  TEST_ASSERT_EQUAL_HEX32(0u, crc32(0, nullptr, 0));
+}
+
+static uint32_t creditNow(const char* crafted = credit::CRAFTED_BY, const char* word = credit::WORDMARK) {
+  return creditCrc(logo_birdlab, sizeof logo_birdlab, logo_birdlab_small, sizeof logo_birdlab_small, crafted, word);
+}
+
+void test_credit_crc_matches_the_shipped_assets() {
+  TEST_ASSERT_EQUAL_HEX32(credit::EXPECTED_CRC, creditNow());   // if you changed the credit on purpose, update credit_crc.h
+  TEST_ASSERT_NOT_EQUAL(credit::EXPECTED_CRC, creditNow("made by"));
+  TEST_ASSERT_NOT_EQUAL(credit::EXPECTED_CRC, creditNow(credit::CRAFTED_BY, "My Kiosk"));
+  uint8_t copy[sizeof logo_birdlab];
+  memcpy(copy, logo_birdlab, sizeof copy);
+  copy[100] ^= 1;
+  TEST_ASSERT_NOT_EQUAL(credit::EXPECTED_CRC, creditCrc(copy, sizeof copy, logo_birdlab_small, sizeof logo_birdlab_small,
+                                                        credit::CRAFTED_BY, credit::WORDMARK));
+  TEST_ASSERT_NOT_EQUAL(credit::EXPECTED_CRC, creditCrc(logo_birdlab, 0, logo_birdlab_small, sizeof logo_birdlab_small,
+                                                        credit::CRAFTED_BY, credit::WORDMARK));   // logo removed
+}
+
+void test_authentic() {
+  TEST_ASSERT_TRUE(authentic(true, credit::EXPECTED_CRC, credit::EXPECTED_CRC));
+  TEST_ASSERT_FALSE(authentic(false, credit::EXPECTED_CRC, credit::EXPECTED_CRC));   // splash skipped or removed
+  TEST_ASSERT_FALSE(authentic(true, credit::EXPECTED_CRC ^ 1, credit::EXPECTED_CRC));  // credit edited
+  TEST_ASSERT_FALSE(authentic(false, 0, credit::EXPECTED_CRC));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_payment_is_shown_only_when_ours);
@@ -172,5 +220,9 @@ int main() {
   RUN_TEST(test_one_shot_timer);
   RUN_TEST(test_reset_reason_names);
   RUN_TEST(test_config);
+  RUN_TEST(test_splash_never_runs_the_relay);
+  RUN_TEST(test_crc32);
+  RUN_TEST(test_credit_crc_matches_the_shipped_assets);
+  RUN_TEST(test_authentic);
   return UNITY_END();
 }

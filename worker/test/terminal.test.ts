@@ -17,7 +17,7 @@ async function paying(s: ReturnType<typeof setup>, ref = "ref1") {
   expect(p).toBeTruthy();
   return { ws, p: p as { pi: string; ref: string; amount: number; qr: string; expires: number } };
 }
-const paid = (pi: string, over: object = {}) => ({ outcome: "succeeded", pi, amount: 2000, currency: "thb", ref: "ref1", ...over });
+const paid = (pi: string, over: object = {}) => ({ outcome: "succeeded", id: pi, amount: 2000, currency: "thb", ref: "ref1", ...over });
 
 describe("create + price enforcement", () => {
   it("creates a PromptPay PaymentIntent for PRICE_SATANG and sends the QR", async () => {
@@ -125,7 +125,7 @@ describe("state transitions", () => {
   });
 
   it.each([
-    ["another PaymentIntent", { pi: "pi_other" }],
+    ["another payment", { id: "pi_other" }],
     ["a different amount", { amount: 1 }],
     ["a different currency", { currency: "usd" }],
     ["a different ref", { ref: "zzz" }],

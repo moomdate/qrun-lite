@@ -108,8 +108,8 @@ speaker already use (see the table above), GPIO 0/2/12/15 (boot straps) and GPIO
 | Variant | What to change |
 |---|---|
 | **ESP32-2432S028R**, one micro-USB port (the original) | nothing; this is the default |
-| Colours inverted (black is white) | toggle `TFT_INVERSION_ON` in `firmware/platformio.ini` (remove the flag or set it for your board) |
-| Touch is off or mirrored | adjust `touch.setCal(...)` in `firmware/src/hw.cpp` (min/max X, min/max Y, rotation) |
+| Colours inverted (black is white) | some older CYD boards need `-D TFT_INVERSION_ON=1`: uncomment it in `firmware/platformio.ini` |
+| Touch is off or mirrored | adjust `X_MIN`, `X_MAX`, `Y_MIN`, `Y_MAX` (raw readings at the screen edges) or `PRESSED_Z1` in `firmware/src/hw.cpp`; `[TAP] x,y` on serial shows where a tap landed |
 | **CYD2USB** (micro-USB + USB-C) | uses an ST7789 display driver: replace `ILI9341_2_DRIVER` with `ST7789_DRIVER` in `platformio.ini`, and check the inversion flag |
 | 2.4" / 3.2" / 3.5" "CYD-like" boards | different display, touch and pins; not supported as-is |
 

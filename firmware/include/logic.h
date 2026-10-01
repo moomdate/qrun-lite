@@ -8,7 +8,7 @@
 
 namespace lite {
 
-enum Screen : uint8_t { IDLE, CREATING, QR, RUNNING, MESSAGE };
+enum Screen : uint8_t { IDLE, CREATING, QR, RUNNING, MESSAGE, SPLASH };   // SPLASH: the boot credit, first ~1.8 s
 enum Message : uint8_t { MSG_CANCELED, MSG_EXPIRED, MSG_FAILED, MSG_ERROR };
 
 // Longest payment id / QR payload the kiosk keeps. A longer QR can't be drawn (see qrVersionFor).
@@ -32,6 +32,7 @@ enum Action : uint8_t {
   REJECT_QR,      // ours, but too big to keep: cancel it and show an error
   DISCARD_QR,     // a pending payment we did not ask for (e.g. after a reboot): cancel it quietly
   RUN,            // paid: switch the relay on
+  DEFER_RUN,      // paid while the boot splash is up: remember it, run the relay when the splash ends
   SHOW_RESULT,    // canceled / expired / failed: show the message
   SHOW_ERROR,     // our create failed
   CANCEL_FAILED,  // our cancel failed: let the customer press it again
@@ -45,7 +46,7 @@ inline Action onPayment(const State& s, const char* pi, const char* ref, const c
   // "succeeded", which runs the relay as usual.
   // The same goes for any payment that arrives while no QR can be shown (after the create timed out, or while the
   // relay runs because an earlier QR was paid): nobody can pay it, so don't leave it payable until the Worker's TTL.
-  if (s.screen == IDLE || s.screen == MESSAGE || s.screen == RUNNING) return DISCARD_QR;
+  if (s.screen == IDLE || s.screen == MESSAGE || s.screen == RUNNING || s.screen == SPLASH) return DISCARD_QR;
   bool ours = (s.screen == CREATING && same(ref, s.ref)) ||
               (s.screen == QR && same(pi, s.pi));     // re-sent after a reconnect
   if (!ours) return IGNORE;
@@ -56,7 +57,10 @@ inline Action onPayment(const State& s, const char* pi, const char* ref, const c
 inline Action onStatus(const State& s, const char* pi, const char* status) {
   if (empty(pi) || strlen(pi) > PI_MAX) return IGNORE;
   if (s.screen == RUNNING) return IGNORE;                        // never restart or extend a run
-  if (same(status, "succeeded")) return same(pi, s.lastRunPi) ? IGNORE : RUN;   // paid is paid, whatever is on screen
+  if (same(status, "succeeded")) {   // paid is paid, whatever is on screen
+    if (same(pi, s.lastRunPi)) return IGNORE;
+    return s.screen == SPLASH ? DEFER_RUN : RUN;   // the splash never switches the relay; it runs right after
+  }
   if (same(pi, s.pi) && s.screen == QR) return SHOW_RESULT;
   return IGNORE;
 }
@@ -145,6 +149,31 @@ inline uint8_t qrVersionFor(size_t len) {
   uint8_t v = 3;
   while (v < 15 && cap[v] < len) v++;
   return cap[v] >= len ? v : 0;
+}
+
+// CRC-32 (IEEE, as zlib/PNG), continuing from `crc` (0 to start).
+inline uint32_t crc32(uint32_t crc, const uint8_t* p, size_t n) {
+  crc = ~crc;
+  while (n--) {
+    crc ^= *p++;
+    for (int k = 0; k < 8; k++) crc = (crc >> 1) ^ (0xEDB88320u & (0u - (crc & 1)));
+  }
+  return ~crc;
+}
+
+// CRC over the birdlab.th credit: both logo masks, the "crafted by" label and the splash wordmark. The expected
+// value lives in include/credit_crc.h, away from the splash code.
+inline uint32_t creditCrc(const uint8_t* logo, size_t logoLen, const uint8_t* small, size_t smallLen,
+                          const char* crafted, const char* wordmark) {
+  uint32_t c = crc32(0, logo, logoLen);
+  c = crc32(c, small, smallLen);
+  c = crc32(c, (const uint8_t*)crafted, strlen(crafted));
+  return crc32(c, (const uint8_t*)wordmark, strlen(wordmark));
+}
+
+// Unmodified credit AND the splash ran to its end this boot. Only the header label depends on it; payments never do.
+inline bool authentic(bool splashCompleted, uint32_t actualCrc, uint32_t expectedCrc) {
+  return splashCompleted && actualCrc == expectedCrc;
 }
 
 // 2000 -> "20", 2050 -> "20.50"

@@ -8,6 +8,10 @@ ESP32 kiosk ──wss + device token──▶ Worker ──▶ Durable Object "T
                                       └──────────── signed webhook (whsec_) ◀────────────┘
 ```
 
+> The Worker talks to a payment provider through a small interface ([docs/payment-providers.md](docs/payment-providers.md)).
+> Stripe is the default and is what this document describes; another provider changes nothing on the wire. `pi` is
+> simply the wire name of the provider's payment id.
+
 ## Connection
 
 `GET wss://<worker-host>/ws?device=<name>` with the header `Authorization: Bearer <DEVICE_TOKEN>`.

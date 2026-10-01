@@ -78,11 +78,25 @@ Captured from a real board (320×240). The QR in these pictures is fake preview 
 | ![](docs/screens/qr_urgent.png)<br>Last 30 s: amber countdown | ![](docs/screens/qr_cancelling.png)<br>Cancel sent | ![](docs/screens/qr_offline.png)<br>Offline while the QR is shown |
 | ![](docs/screens/running.png)<br>Paid: relay on, countdown | ![](docs/screens/canceled.png)<br>Canceled | ![](docs/screens/expired.png)<br>QR expired |
 | ![](docs/screens/failed.png)<br>Payment failed | ![](docs/screens/error.png)<br>Error (any cause) | ![](docs/screens/qr_test.png)<br>QR in test mode |
+| ![](docs/screens/splash.png)<br>Boot credit (splash) | | |
 
 | Folder | What |
 |---|---|
 | [`worker/`](worker/) | Cloudflare Worker + Durable Object (TypeScript, no runtime dependencies) |
 | [`firmware/`](firmware/) | PlatformIO / Arduino project for the ESP32-2432S028R ("Cheap Yellow Display") |
+
+## Customise the look
+
+Everything on the screen is set in three small headers in [`firmware/include/`](firmware/include/); no drawing code to touch:
+
+| To change | Edit |
+|---|---|
+| Brand name, price, run time, relay pin | [`config.h`](firmware/include/config.h) |
+| Colours (palette tokens) | [`theme.h`](firmware/include/theme.h): the panel keeps only 256 colours (RGB332), so colours are written as `rgb332(r 0..7, g 0..7, b 0..3)` and show exactly as written |
+| Every text, e.g. to translate | [`strings.h`](firmware/include/strings.h): one table, Thai by default (fonts hold ASCII + Thai only) |
+| Layout, or a new screen | [`ui.cpp`](firmware/src/ui.cpp): button rectangles at the top, one small function per screen |
+
+Rebuild and flash (`pio run -t upload`) after any change. Keep the QR card white-on-black (`QR_BG` / `QR_FG`).
 
 ## Hardware
 
@@ -181,7 +195,7 @@ token travels unencrypted).
 | Every tap ends in **เกิดข้อผิดพลาด**; serial `[ERR] server misconfigured`; tail `STRIPE_SECRET_KEY secret is not set` or `… is not a Stripe secret key` | The Stripe key is missing, empty (see the `secret put` note in step 3) or not a secret key (`pk_…`, `whsec_…`, quotes). Set it again with the full `sk_…`/`rk_…`. The Worker never calls Stripe without a valid-looking key. |
 | The board **reboots a few seconds after the relay switches on**; serial shows `[BOOT] reset reason BROWNOUT` | The relay coil pulls the 3.3 V rail down. Power the relay from its own 5 V supply, use a module with a driver and flyback diode: [docs/hardware.md → Power](docs/hardware.md#power-read-this-if-the-board-reboots). |
 | Relay works backwards | Set `RELAY_ACTIVE_HIGH = false` in `config.h` (low-trigger relay boards). |
-| Touch is off / colours are inverted | Some CYD versions differ. Adjust `touch.setCal(...)` in `firmware/src/hw.cpp` or `TFT_INVERSION_ON` in `platformio.ini`. The 2-USB-port "CYD2USB" uses a different display driver. |
+| Touch is off / colours are inverted | Some CYD versions differ. Adjust the touch calibration (`X_MIN`…`Y_MAX`) in `firmware/src/hw.cpp`; some older boards need `-D TFT_INVERSION_ON=1` uncommented in `platformio.ini`. The 2-USB-port "CYD2USB" uses a different display driver. |
 | Worker on a custom domain can't connect over TLS | `firmware/include/root_ca.h` pins the roots Cloudflare uses for `*.workers.dev` (Google Trust Services, Let's Encrypt). Add your certificate's root if it's different. |
 
 ## Tests
@@ -196,6 +210,12 @@ over a real WebSocket: happy path, wrong price, cancel, expiry, payment while of
 signature, cancel-then-create, a create replacing a pending QR, a payment racing a cancel, a reboot while a QR is
 pending, malformed and oversized frames, and a Worker without its Stripe key. The tests never call real Stripe and
 never read your `.dev.vars`. GitHub Actions runs all of it on every push ([ci.yml](.github/workflows/ci.yml)).
+
+## Other payment providers
+
+Stripe is the default, but the Worker's core only knows a small provider interface. Adding Omise, 2C2P, a bank's
+PromptPay API or a mock is one file plus one registry line, with the same device protocol and the same safety rules.
+See [docs/payment-providers.md](docs/payment-providers.md) and [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security notes
 
@@ -218,7 +238,7 @@ features are **not in the Lite code** (they were removed, not switched off):
 |---|---|---|
 | Prices | one fixed price | price menu with tiers (e.g. 10 / 20 / 50 ฿), each with its own run time |
 | Kiosks | one, with one `DEVICE_TOKEN` | many, one token and one Durable Object per kiosk (`DEVICE_TOKENS` map) |
-| Worker design | four plain modules | hexagonal (ports & adapters): swappable payment provider, in-memory fake provider |
+| Worker design | plain modules, one small [payment-provider interface](docs/payment-providers.md) (Stripe, dev-only mock) | hexagonal (ports & adapters) throughout, in-memory fake provider |
 | Lost webhooks | checked on reconnect and at QR expiry | also polls Stripe every few seconds while a QR is shown |
 | Abuse protection | device token, fixed price, input limits | + per-kiosk payment rate limit, frame-flood protection, throttled re-checks |
 | Recovery | best effort: a result is kept until it's sent once; pending payments are re-checked on `hello` | replay of final results with delivery bookkeeping, re-sent creates after a reconnect, cancel while offline, cancel-in-flight handling |
@@ -239,3 +259,6 @@ available from the author, moomdate. Contact: open an issue or message [@moomdat
 [MIT](LICENSE), © 2026 moomdate. The Sarabun font in `firmware/src/fonts/` is under the
 [SIL Open Font License 1.1](firmware/src/fonts/OFL.txt). Third-party components and their licenses:
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+The birdlab.th logo and the boot-splash credit are the author's brand, not MIT-licensed: please keep them when you
+share QRun Lite. See [NOTICE](NOTICE).

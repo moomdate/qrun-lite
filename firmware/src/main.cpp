@@ -10,6 +10,7 @@
 #include <esp_core_dump.h>
 #include <esp_system.h>
 #include "config.h"
+#include "credit.h"
 #include "hw.h"
 #include "logic.h"
 #include "net.h"
@@ -40,11 +41,14 @@ static constexpr uint32_t CANCEL_TIMEOUT_MS = 10000;   // no answer to a cancel:
 static constexpr uint32_t QR_GRACE_MS = 15000;         // the Worker should report "expired" first
 static constexpr uint32_t MESSAGE_MS = 4000;
 static constexpr uint32_t BOOT_TAP_GUARD_MS = 1500;   // ignore touch noise while the panel powers up
+static constexpr uint32_t SPLASH_MS = 1800;            // boot credit, always shown
+static constexpr uint32_t SPLASH_SKIP_MS = 1000;       // a tap may skip it only after this
+static constexpr uint32_t SPLASH_FRAME_MS = 50;        // progress bar redraw interval
 static constexpr uint32_t FALLBACK_TTL_SEC = 120;      // QR countdown before NTP time is known
 
-static Screen screen = IDLE;
-static char ref[16] = "", pi[PI_MAX + 1] = "", qr[QR_MAX + 1] = "", lastRunPi[PI_MAX + 1] = "";
-static uint32_t since = 0, qrDeadline = 0, runUntil = 0, cancelAt = 0, lastDraw = 0;
+static Screen screen = SPLASH;   // the boot credit; payment frames are held back until it ends (see finishSplash)
+static char ref[16] = "", pi[PI_MAX + 1] = "", qr[QR_MAX + 1] = "", lastRunPi[PI_MAX + 1] = "", deferredPi[PI_MAX + 1] = "";
+static uint32_t since = 0, qrDeadline = 0, qrTotalSec = 0, runUntil = 0, cancelAt = 0, lastDraw = 0;
 static bool wifi = false, online = false, live = true, cancelling = false, dirty = true;
 static BootGuard bootGuard;
 static Message message = MSG_ERROR;
@@ -52,7 +56,7 @@ static Message message = MSG_ERROR;
 static const char* screenName(Screen s) {
   switch (s) {
     case IDLE: return "idle"; case CREATING: return "creating"; case QR: return "qr";
-    case RUNNING: return "running"; case MESSAGE: return "message";
+    case RUNNING: return "running"; case MESSAGE: return "message"; case SPLASH: return "splash";
   }
   return "?";
 }
@@ -78,6 +82,18 @@ static void run(const char* paidPi) {
                 cfg::RELAY_PIN, cfg::RELAY_ACTIVE_HIGH ? "high" : "low");
   hw::beepPaid();
   go(RUNNING);
+}
+
+// End of the boot splash. A payment that was reported paid meanwhile (e.g. a QR paid just before a reboot) runs now.
+static void finishSplash() {
+  ui::splashDone();
+  if (deferredPi[0]) {
+    Serial.printf("[PAY] %s was paid during the splash: running now\n", deferredPi);
+    run(deferredPi);
+    deferredPi[0] = 0;
+  } else {
+    go(IDLE);
+  }
 }
 
 static State state() { return State{screen, ref, pi, lastRunPi}; }
@@ -130,14 +146,17 @@ static void onHello(bool isLive) { online = true; live = isLive; dirty = true; }
 
 static void onPayment(const char* id, const char* r, const char* data, int64_t expires) {
   switch (lite::onPayment(state(), id, r, data)) {
-    case SHOW_QR:
+    case SHOW_QR: {
       if (!same(id, pi) || screen != QR) cancelling = false;
       strlcpy(pi, id, sizeof pi);
       strlcpy(ref, r, sizeof ref);
       strlcpy(qr, data, sizeof qr);
-      qrDeadline = millis() + secondsLeft(expires, (int64_t)time(nullptr), FALLBACK_TTL_SEC) * 1000;
+      uint32_t ttl = secondsLeft(expires, (int64_t)time(nullptr), FALLBACK_TTL_SEC);
+      qrDeadline = millis() + ttl * 1000;
+      if (screen != QR || ttl > qrTotalSec) qrTotalSec = ttl;   // progress bar length (a re-sent QR keeps the first)
       go(QR);
       break;
+    }
     case REJECT_QR:
       net::cancel(id);
       showMessage(MSG_ERROR);
@@ -154,6 +173,9 @@ static void onPayment(const char* id, const char* r, const char* data, int64_t e
 static void onStatus(const char* id, const char* status) {
   switch (lite::onStatus(state(), id, status)) {
     case RUN: run(id); break;
+    case DEFER_RUN:   // the splash never touches the relay; a second paid id during it is dropped like one during RUNNING
+      if (!deferredPi[0]) strlcpy(deferredPi, id, sizeof deferredPi);
+      break;
     case SHOW_RESULT: showMessage(messageFor(status)); break;
     default: break;
   }
@@ -178,8 +200,10 @@ void setup() {
   hw::wifiBegin(WIFI_SSID, WIFI_PASS);
   net::begin({WS_HOST, WS_PORT, WS_USE_TLS, DEVICE_ID, "Authorization: Bearer " DEVICE_TOKEN, ROOT_CA_BUNDLE},
              {onLinkUp, onLinkDown, onHello, onPayment, onStatus, onError});
+  Serial.println("[QRun Lite] crafted by birdlab.th (birdlab.moomdate.tech)");
   Serial.printf("[QRun Lite] %s, price %lu satang, run %lu s -> %s://%s:%d\n", FW_VERSION, (unsigned long)cfg::PRICE_SATANG,
                 (unsigned long)cfg::RUN_SECONDS, WS_USE_TLS ? "wss" : "ws", WS_HOST, WS_PORT);
+  since = millis();   // the splash starts now; loop() draws it and keeps net::pump() running meanwhile
 }
 
 void loop() {
@@ -205,10 +229,15 @@ void loop() {
       dirty = true;
     } else if (screen == MESSAGE && elapsedMs(now, since) > 600) {
       go(IDLE);
+    } else if (screen == SPLASH && elapsedMs(now, since) > SPLASH_SKIP_MS) {
+      finishSplash();   // the tap is consumed here: it does not reach the idle screen
     }
   }
 
   switch (screen) {
+    case SPLASH:
+      if (elapsedMs(now, since) >= SPLASH_MS) finishSplash();
+      break;
     case CREATING:
       if (elapsedMs(now, since) > CREATE_TIMEOUT_MS) showMessage(MSG_ERROR);
       break;
@@ -233,10 +262,12 @@ void loop() {
 
   // Full redraw on every change, and once a second while a countdown is on screen.
   bool ticking = screen == QR || screen == RUNNING;
-  if (dirty || (ticking && elapsedMs(now, lastDraw) >= 1000)) {
+  if (dirty || (ticking && elapsedMs(now, lastDraw) >= 1000) || (screen == SPLASH && elapsedMs(now, lastDraw) >= SPLASH_FRAME_MS)) {
+    uint32_t sp = elapsedMs(now, since) * 100 / SPLASH_MS;
     uint32_t end = screen == QR ? qrDeadline : runUntil;
     uint32_t left = (int32_t)(end - now) > 0 ? (end - now + 999) / 1000 : 0;
-    ui::draw({screen, wifi, online, live, cfg::PRICE_SATANG, left, qr, cancelling, message});
+    ui::draw({screen, wifi, online, live, cfg::PRICE_SATANG, left,
+             screen == QR ? qrTotalSec : cfg::RUN_SECONDS, qr, cancelling, message, sp > 100 ? 100 : sp, FW_VERSION});
     dirty = false;
     lastDraw = now;
   }

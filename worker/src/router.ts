@@ -1,12 +1,13 @@
 // HTTP routes: device WebSocket (token auth) + Stripe webhook, both routed to the one Durable Object.
 //   GET  /health          "ok"
 //   GET  /ws              Authorization: Bearer <DEVICE_TOKEN>, WebSocket upgrade (PROTOCOL.md)
-//   POST /stripe/webhook  signed Stripe events
-import { isLiveKey, parseEvent, verifySignature } from "./stripe";
-import type { Env } from "./terminal";
+//   POST /webhook/<provider>  authenticated provider notifications (<provider> must be the active PAYMENT_PROVIDER)
+//   POST /stripe/webhook      the original path of the Stripe endpoint, same as /webhook/stripe (keep: deployed endpoints use it)
+import type { Env } from "./env";
+import { resolveProvider } from "./providers";
 import { log, MIN_DEVICE_TOKEN, secret, timingSafeEqual, validDeviceId } from "./util";
 
-/** Stripe events are a few KB. */
+/** Webhook bodies are a few KB. */
 export const MAX_WEBHOOK_BYTES = 64 * 1024;
 
 const text = (body: string, status = 200) => new Response(body, { status, headers: { "content-type": "text/plain" } });
@@ -38,27 +39,31 @@ async function handleWs(req: Request, env: Env, url: URL): Promise<Response> {
   return terminal(env).fetch("https://do/ws", { headers: { Upgrade: "websocket", "X-Device-Id": validDeviceId(d) ? d : "kiosk" } });
 }
 
-async function handleWebhook(req: Request, env: Env): Promise<Response> {
+async function handleWebhook(req: Request, env: Env, name: string): Promise<Response> {
+  const provider = resolveProvider(env);
+  if (provider.name !== name) return text("not found", 404); // only the active provider has a webhook
   if (Number(req.headers.get("content-length") ?? 0) > MAX_WEBHOOK_BYTES) return text("payload too large", 413);
   const buf = await req.arrayBuffer();
   if (buf.byteLength > MAX_WEBHOOK_BYTES) return text("payload too large", 413);
   const raw = new TextDecoder().decode(buf);
-  const whsec = secret(env.STRIPE_WEBHOOK_SECRET);
-  if (!(await verifySignature(raw, req.headers.get("Stripe-Signature"), whsec))) {
-    log(whsec ? "webhook rejected: bad signature" : "webhook rejected: STRIPE_WEBHOOK_SECRET is not set");
+  const w = await provider.parseWebhook(raw, req.headers);
+  if (w.kind === "bad") {
+    log(`webhook rejected: ${w.reason}`);
     return text("bad signature", 400);
   }
-  const e = parseEvent(raw, isLiveKey(secret(env.STRIPE_SECRET_KEY)));
-  if (!e) return text("ignored"); // authentic but not for us: 200 so Stripe doesn't retry
+  if (w.kind === "ignored") return text("ignored"); // authentic but not for us: 200 so the provider doesn't retry
+  const e = w.event;
   try {
     const r = await terminal(env).fetch("https://do/event", { method: "POST", body: JSON.stringify(e) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   } catch (err) {
-    log(`webhook ${e.pi} failed: ${(err as Error).message}`);
-    return text("retry", 500); // Stripe retries later
+    log(`webhook ${e.id} failed: ${(err as Error).message}`);
+    return text("retry", 500); // the provider retries later
   }
   return text("ok");
 }
+
+const WEBHOOK_PATH = /^\/webhook\/([a-z0-9_-]{1,32})$/;
 
 export default {
   async fetch(req, env): Promise<Response> {
@@ -69,10 +74,11 @@ export default {
           return text("ok");
         case "/ws":
           return await handleWs(req, env, url);
-        case "/stripe/webhook":
-          return req.method === "POST" ? await handleWebhook(req, env) : text("method not allowed", 405);
-        default:
-          return text("not found", 404);
+        default: {
+          const name = url.pathname === "/stripe/webhook" ? "stripe" : WEBHOOK_PATH.exec(url.pathname)?.[1];
+          if (!name) return text("not found", 404);
+          return req.method === "POST" ? await handleWebhook(req, env, name) : text("method not allowed", 405);
+        }
       }
     } catch (e) {
       log(`unhandled error: ${(e as Error)?.message ?? String(e)}`); // never leak a stack trace

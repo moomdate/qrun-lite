@@ -35,7 +35,7 @@ QRun Lite คือรุ่นเล็กที่อ่านโค้ดง�
 ![แผนภาพ QRun Lite: ตู้, Cloudflare Worker และ Durable Object, Stripe](docs/architecture.svg)
 
 **เอกสาร:** [เริ่มที่นี่ (มือใหม่)](docs/start-here.md) · [คู่มือ Deploy](docs/deploy.md) ([English](docs/deploy.en.md)) · [ฮาร์ดแวร์และการต่อรีเลย์](docs/hardware.md) (อังกฤษ) ·
-[Protocol](PROTOCOL.md) · [หน้าจอทั้งหมด](#หน้าจอ)
+[Protocol](PROTOCOL.md) · [ผู้ให้บริการชำระเงินอื่น](docs/payment-providers.md) (อังกฤษ) · [ร่วมพัฒนา](CONTRIBUTING.md) · [หน้าจอทั้งหมด](#หน้าจอ)
 
 ## ทำงานอย่างไร
 
@@ -76,11 +76,25 @@ sequenceDiagram
 | ![](docs/screens/qr_urgent.png)<br>30 วินาทีสุดท้าย: ตัวเลขสีเหลือง | ![](docs/screens/qr_cancelling.png)<br>ส่งคำขอยกเลิกแล้ว | ![](docs/screens/qr_offline.png)<br>หลุดเน็ตระหว่างแสดง QR |
 | ![](docs/screens/running.png)<br>จ่ายแล้ว: รีเลย์ทำงาน นับถอยหลัง | ![](docs/screens/canceled.png)<br>ยกเลิกแล้ว | ![](docs/screens/expired.png)<br>QR หมดอายุ |
 | ![](docs/screens/failed.png)<br>จ่ายไม่สำเร็จ | ![](docs/screens/error.png)<br>ข้อผิดพลาด (ทุกสาเหตุ) | ![](docs/screens/qr_test.png)<br>QR โหมดทดสอบ |
+| ![](docs/screens/splash.png)<br>หน้าเปิดเครื่อง (เครดิต) | | |
 
 | โฟลเดอร์ | คืออะไร |
 |---|---|
 | [`worker/`](worker/) | Cloudflare Worker + Durable Object (TypeScript ไม่มี runtime dependency) |
 | [`firmware/`](firmware/) | โปรเจกต์ PlatformIO / Arduino สำหรับบอร์ด ESP32-2432S028R ("Cheap Yellow Display") |
+
+## ปรับหน้าตา
+
+ทุกอย่างบนหน้าจอตั้งได้ในไฟล์เล็ก ๆ สามไฟล์ใน [`firmware/include/`](firmware/include/) ไม่ต้องแตะโค้ดวาด:
+
+| อยากเปลี่ยน | แก้ไฟล์ |
+|---|---|
+| ชื่อแบรนด์ ราคา เวลาทำงาน ขารีเลย์ | [`config.h`](firmware/include/config.h) |
+| สี | [`theme.h`](firmware/include/theme.h): จอแสดงได้ 256 สี (RGB332) จึงเขียนสีเป็น `rgb332(แดง 0..7, เขียว 0..7, น้ำเงิน 0..3)` แล้วจะขึ้นตรงตามที่เขียน |
+| ข้อความทั้งหมด (เช่น แปลภาษา) | [`strings.h`](firmware/include/strings.h): ตารางเดียว ค่าเริ่มต้นเป็นภาษาไทย (ฟอนต์มีแค่ ASCII + ไทย) |
+| เลย์เอาต์ หรือเพิ่มหน้าจอ | [`ui.cpp`](firmware/src/ui.cpp): ตำแหน่งปุ่มอยู่บนสุดของไฟล์ แต่ละหน้าจอเป็นฟังก์ชันเล็ก ๆ |
+
+แก้แล้วบิลด์และแฟลชใหม่ (`pio run -t upload`) อย่าเปลี่ยนสี QR ให้ไม่ใช่พื้นขาว/จุดดำ (`QR_BG` / `QR_FG`)
 
 ## ฮาร์ดแวร์
 
@@ -178,7 +192,7 @@ stripe listen --forward-to localhost:8787/stripe/webhook   # จะแสดง 
 | แตะทีไรขึ้น **เกิดข้อผิดพลาด**; serial ขึ้น `[ERR] server misconfigured`; tail ขึ้น `STRIPE_SECRET_KEY secret is not set` หรือ `… is not a Stripe secret key` | คีย์ Stripe ไม่ได้ตั้ง เป็นค่าว่าง (ดูหมายเหตุ `secret put` ในขั้นที่ 3) หรือไม่ใช่ secret key (`pk_…`, `whsec_…`, มีเครื่องหมายคำพูด) ตั้งใหม่ด้วย `sk_…`/`rk_…` ให้ครบทั้งตัว Worker จะไม่เรียก Stripe ถ้าคีย์ดูไม่ถูกต้อง |
 | **บอร์ดรีบูตหลังรีเลย์ติดไม่กี่วินาที**; serial ขึ้น `[BOOT] reset reason BROWNOUT` | คอยล์รีเลย์ดึงไฟ 3.3 V จนตก ให้จ่ายไฟรีเลย์จากแหล่ง 5 V แยก และใช้โมดูลที่มีวงจรขับกับไดโอดกันไฟย้อน: [docs/hardware.md → Power](docs/hardware.md#power-read-this-if-the-board-reboots) |
 | รีเลย์ทำงานกลับด้าน | ตั้ง `RELAY_ACTIVE_HIGH = false` ใน `config.h` (บอร์ดรีเลย์แบบ low-trigger) |
-| แตะไม่ตรง / สีเพี้ยนกลับด้าน | บอร์ด CYD บางรุ่นต่างกัน ปรับ `touch.setCal(...)` ใน `firmware/src/hw.cpp` หรือ `TFT_INVERSION_ON` ใน `platformio.ini` รุ่น "CYD2USB" (มีพอร์ต USB 2 ช่อง) ใช้ไดรเวอร์จอคนละตัว |
+| แตะไม่ตรง / สีเพี้ยนกลับด้าน | บอร์ด CYD บางรุ่นต่างกัน ปรับค่า calibrate touch (`X_MIN`…`Y_MAX`) ใน `firmware/src/hw.cpp` บอร์ดรุ่นเก่าบางตัวต้องเปิด `-D TFT_INVERSION_ON=1` ใน `platformio.ini` รุ่น "CYD2USB" (มีพอร์ต USB 2 ช่อง) ใช้ไดรเวอร์จอคนละตัว |
 | ใช้ Worker กับโดเมนของตัวเองแล้วต่อ TLS ไม่ได้ | `firmware/include/root_ca.h` ปักหมุด root CA ที่ Cloudflare ใช้กับ `*.workers.dev` (Google Trust Services, Let's Encrypt) ถ้าใบรับรองของคุณใช้ root อื่นให้เพิ่มเข้าไป |
 
 ## ทดสอบ
@@ -236,3 +250,6 @@ QRun Lite ใช้งานได้ครบสำหรับตู้เด�
 [MIT](LICENSE) © 2026 moomdate ฟอนต์ Sarabun ใน `firmware/src/fonts/` ใช้สัญญาอนุญาต
 [SIL Open Font License 1.1](firmware/src/fonts/OFL.txt) ส่วนประกอบของบุคคลที่สามและสัญญาอนุญาต:
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+
+โลโก้ birdlab.th และเครดิตบนหน้าจอตอนเปิดเครื่องเป็นแบรนด์ของผู้เขียน ไม่อยู่ใต้ MIT โปรดคงไว้เมื่อแจกจ่าย QRun Lite
+ดู [NOTICE](NOTICE)
